@@ -153,3 +153,61 @@ a{color:inherit}
 .empty-hint{color:var(--faint);font-size:12px;text-align:center;padding:30px 10px}
 
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:#0a0d13;padding:10px 16px;border-radius:999px;font-size:12.5px;font-weight:600;box-shadow:var(--shadow);z-index:40}
+
+/* ---------- Bibliothèque de projets ---------- */
+.library{min-height:100vh;max-width:1000px;margin:0 auto;padding:40px 32px 70px}
+.library-head{margin-bottom:26px}
+.library-head h1{font-size:32px;margin:22px 0 6px;font-weight:700;letter-spacing:-.5px}
+.library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.project-card{text-align:left;background:var(--panel-2);border:1px solid var(--stroke);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+.project-card:hover{border-color:rgba(63,214,245,.4)}
+.project-card.new-card{align-items:center;justify-content:center;gap:8px;border-style:dashed;color:var(--muted)}
+.project-card.new-card .plus{font-size:26px;color:var(--cyan)}
+.pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.pc-top b{font-size:15px}
+.pc-pct{color:var(--cyan);font:12px "IBM Plex Mono"}
+.pc-artist{color:var(--muted);font-size:12px}
+.pc-meta{color:var(--faint);font-size:10.5px;margin-top:4px}
+
+/* ---------- Modale nouveau projet ---------- */
+.modal-backdrop{position:fixed;inset:0;background:rgba(4,5,9,.72);display:grid;place-items:center;z-index:50;padding:20px}
+.modal{background:var(--panel-2);border:1px solid var(--stroke-2);border-radius:18px;padding:22px;width:100%;max-width:380px;box-shadow:var(--shadow)}
+.modal h2{margin:0 0 16px;font-size:18px}
+.modal label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:12px}
+.modal label input{display:block;width:100%;margin-top:5px;background:var(--raised);border:1px solid var(--stroke);border-radius:10px;padding:10px 11px;color:var(--text);font-size:13px}
+.modal label input:focus{outline:none;border-color:var(--cyan)}
+.modal-hint{color:var(--faint);font-size:11px;line-height:1.5;margin:2px 0 16px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px}
+
+/* ---------- Sélecteur de projet (sidebar) ---------- */
+.project-select{position:relative}
+.project-menu{position:absolute;left:0;right:0;margin-top:6px;background:var(--raised);border:1px solid var(--stroke-2);border-radius:12px;padding:6px;z-index:30;box-shadow:var(--shadow);max-height:260px;overflow:auto}
+.pm-item{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);padding:8px 9px;border-radius:8px;font-size:12.5px}
+.pm-item:hover{background:var(--panel-2)}
+.pm-item.current{color:var(--cyan);font-weight:650}
+.pm-item.pm-new{color:var(--gold);border-top:1px solid var(--stroke);margin-top:4px;padding-top:9px}
+.pm-item.pm-home{color:var(--muted)}
+
+/* ---------- Étape Sources ---------- */
+.status-chip.chip-pending{color:var(--amber);background:rgba(242,179,92,.12);border-color:rgba(242,179,92,.3)}
+.status-chip.chip-pending::before{background:var(--amber)}
+.dropzone{border:1.5px dashed var(--stroke-2);border-radius:16px;text-align:center;padding:34px 20px;cursor:pointer;color:var(--muted)}
+.dropzone.drag{border-color:var(--cyan);background:var(--cyan-dim)}
+.dropzone .dz-icon{font-size:22px;color:var(--cyan);margin-bottom:8px}
+.dropzone b{display:block;color:var(--text);font-size:13.5px;margin-bottom:4px}
+.dropzone small{font-size:11px}
+.dup-banner{display:flex;align-items:center;gap:10px;color:var(--amber);background:rgba(242,179,92,.1);border:1px solid rgba(242,179,92,.3);border-radius:12px;padding:11px 14px;font-size:12.5px;margin-bottom:16px;flex-wrap:wrap}
+.source-group h2{display:flex;align-items:center;gap:8px}
+.source-group h2 .count{color:var(--faint);font-size:11px;font-weight:400}
+.source-list{display:flex;flex-direction:column;gap:8px}
+.source-row{display:flex;align-items:center;gap:11px;background:var(--raised);border:1px solid var(--stroke);border-radius:11px;padding:9px 10px}
+.src-thumb{width:38px;height:38px;border-radius:8px;overflow:hidden;background:var(--panel);display:grid;place-items:center;flex:0 0 auto;color:var(--faint)}
+.src-thumb img{width:100%;height:100%;object-fit:cover}
+.src-meta{flex:1;min-width:0}
+.src-name{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-sub{font-size:10.5px;color:var(--faint)}
+.dup-badge{font:9px "IBM Plex Mono";color:var(--amber);background:rgba(242,179,92,.15);border-radius:999px;padding:2px 6px;margin-left:6px}
+.role-select{background:var(--panel);border:1px solid var(--stroke);border-radius:8px;padding:6px 8px;font-size:11.5px;color:var(--muted)}
+.src-del{background:none;border:0;color:var(--faint);font-size:13px;padding:4px 6px}
+.src-del:hover{color:var(--red)}
+.empty-card{padding:30px}

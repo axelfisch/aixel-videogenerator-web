@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0)
+# AiXel VideoGenerator — reprise en code source (V0 → V0.5)
 
 ## Pourquoi cette reconstruction
 
@@ -22,12 +22,25 @@ sans étape de build — exactement le même choix technique que pour `aixeln-ly
   données sont des données de démonstration codées en dur dans `app.js`, en attendant l'étape
   suivante.
 
-## Prochaine étape convenue (V0.5 — Sources et inventaire)
+## V0.5 — Sources et inventaire (fait)
 
-Rendre "Nouveau projet" opérationnel : import réel de fichiers (audio, images, paroles), inventaire
-classé, sauvegarde par projet (pas un seul projet BMW/BNC codé en dur) — **avant** de brancher la
-vraie analyse audio (Web Audio API en local, dans l'esprit de Visual Melody) qui remplacera la forme
-d'onde simulée.
+- **Bibliothèque de projets** : écran d'accueil listant tous les projets, "+ Nouveau projet" opérationnel
+  (titre + artiste), plus un sélecteur de projet dans la sidebar pour naviguer entre eux sans repasser
+  par l'accueil. BMW/BNC — MAT reste le projet pilote de démonstration ; tout nouveau projet démarre vide.
+- **Import réel de sources** : glisser-déposer ou sélection de fichiers (audio, images, paroles
+  .txt/.pdf/.docx, vidéo, logos). Classement automatique par catégorie, rôle éditable
+  (Source/Référence/Brouillon/Livrable), détection de doublons (même nom + même taille).
+- **Stockage local réel** : les fichiers eux-mêmes sont gardés dans IndexedDB (le navigateur, pas
+  localStorage — trop petit pour du binaire), donc ils survivent au rechargement de la page, sans
+  aucun serveur ni compte. Conforme au principe "gratuit et local tant que c'est soutenable".
+- **Barrière verrouillable** comme la carte musicale : "Verrouiller l'inventaire" fige les sources et
+  active l'étape suivante (Audio verrouillé), réouvrable à tout moment.
+
+## Prochaine étape (V1 — Préproduction musicale)
+
+Brancher une vraie analyse audio locale (Web Audio API, dans l'esprit de Visual Melody) sur le fichier
+audio détecté dans les sources, pour remplacer la forme d'onde et les métriques simulées de la Carte
+musicale — et faire de "Audio verrouillé" une étape réellement fonctionnelle plutôt qu'un espace réservé.
 
 ## Déployer
 
