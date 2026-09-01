@@ -1,0 +1,6 @@
+[build]
+  publish = "."
+
+# Site 100% statique pour l'instant (V0 — cockpit seul, décisions en localStorage).
+# Aucune fonction serveur nécessaire tant que l'import de sources et l'IA ne sont pas branchés
+# (V0.5 et suivants — voir README.md).
