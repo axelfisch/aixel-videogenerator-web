@@ -183,6 +183,12 @@ a{color:inherit}
 .btn.danger{background:rgba(242,113,111,.14);border-color:rgba(242,113,111,.4);color:var(--red)}
 .btn.danger:hover{background:rgba(242,113,111,.22)}
 
+/* ---------- Visionneuse plein écran (Images tests) ---------- */
+.lightbox-backdrop{background:rgba(4,5,9,.92);cursor:zoom-out}
+.lightbox-img{max-width:90vw;max-height:88vh;border-radius:10px;box-shadow:var(--shadow);object-fit:contain;cursor:default}
+.lightbox-close{position:fixed;top:18px;right:22px;width:38px;height:38px;border-radius:50%;background:var(--raised);border:1px solid var(--stroke-2);color:var(--text);font-size:16px;display:grid;place-items:center;z-index:60}
+.lightbox-close:hover{background:var(--panel-2);color:var(--red)}
+
 /* ---------- Sélecteur de projet (sidebar) ---------- */
 .project-select{position:relative}
 .project-menu{position:absolute;left:0;right:0;margin-top:6px;background:var(--raised);border:1px solid var(--stroke-2);border-radius:12px;padding:6px;z-index:30;box-shadow:var(--shadow);max-height:260px;overflow:auto}
@@ -273,9 +279,11 @@ a{color:inherit}
 /* ---------- Étape Images tests (Image Lab) ---------- */
 .checklist-hint{background:var(--panel);border:1px solid var(--stroke);border-radius:9px;padding:8px 10px;font-size:11px;color:var(--muted);line-height:1.6}
 .checklist-hint b{color:var(--text)}
-.image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
 .image-card{background:var(--panel);border:1px solid var(--stroke);border-radius:11px;overflow:hidden;display:flex;flex-direction:column}
 .image-card.selected{border-color:var(--cyan)}
+.image-thumb{width:100%;aspect-ratio:16/9;background:var(--raised);display:grid;place-items:center;overflow:hidden;cursor:zoom-in}
+.image-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .image-card-body{padding:9px 10px;display:flex;flex-direction:column;gap:7px}
 .image-card-name{display:flex;align-items:center;gap:4px;min-width:0;font-size:11.5px;font-weight:600}
 .image-card-name .name-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}

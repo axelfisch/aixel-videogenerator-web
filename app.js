@@ -467,7 +467,7 @@ function defaultState() {
   // projets migrés depuis une session existante — sinon Histoire/Storyboard/Images/Animatique
   // plantent au premier chargement d'un nouveau navigateur.
   const demo = migrateProject(demoProjectRecord());
-  return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
+  return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null, lightboxSrc: null } };
 }
 
 let state = load();
@@ -478,7 +478,7 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const merged = { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
+      const merged = { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null, lightboxSrc: null } };
       Object.values(merged.projects).forEach(migrateProject);
       return merged;
     }
@@ -487,7 +487,7 @@ function load() {
     if (old) {
       const parsedOld = JSON.parse(old);
       const demo = migrateProject({ ...demoProjectRecord(), ...parsedOld, sources: demoProjectRecord().sources, sourcesLocked: true });
-      return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
+      return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null, lightboxSrc: null } };
     }
     return defaultState();
   } catch {
@@ -1168,6 +1168,16 @@ function renderImagesStep(project) {
         <div class="decision-actions"><button class="btn primary" id="lockImages" ${selectedCount ? "" : "disabled"}>Verrouiller les images tests →</button></div>
       </div>
     ` : ""}
+    ${state.ui.lightboxSrc ? renderImageLightbox() : ""}
+  `;
+}
+
+function renderImageLightbox() {
+  return `
+    <div class="modal-backdrop lightbox-backdrop" id="lightboxBackdrop">
+      <button class="lightbox-close" id="lightboxClose" aria-label="Fermer">✕</button>
+      <img class="lightbox-img" src="${state.ui.lightboxSrc}" alt="" />
+    </div>
   `;
 }
 
@@ -1229,7 +1239,7 @@ function renderImageCandidate(im, sh, project, locked) {
   const isSelected = sh.selectedImageId === im.id;
   return `
     <div class="image-card ${isSelected ? "selected" : ""}">
-      <div class="src-thumb" data-thumb="${im.sourceId}" style="width:100%;aspect-ratio:16/9;border-radius:0">${imageUrlCache.get(im.sourceId) ? `<img src="${imageUrlCache.get(im.sourceId)}" alt="" />` : ""}</div>
+      <div class="image-thumb" data-thumb="${im.sourceId}">${imageUrlCache.get(im.sourceId) ? `<img src="${imageUrlCache.get(im.sourceId)}" alt="" />` : ""}</div>
       <div class="image-card-body">
         <div class="image-card-name"><span class="name-text">${escapeHtml(src ? src.name : "Image introuvable")}</span>${src && src.generated ? `<span class="gen-badge">IA</span>` : ""}</div>
         <select class="canon-category" data-imagestatus="${im.id}" ${locked ? "disabled" : ""}>
@@ -2104,6 +2114,13 @@ function bindImagesStep(project) {
   const findShot = (id) => project.storyboard.shots.find((s) => s.id === id);
   const findImage = (id) => project.storyboard.shots.flatMap((s) => s.images).find((im) => im.id === id);
 
+  document.querySelectorAll(".image-thumb[data-thumb]").forEach((el) => el.addEventListener("click", () => {
+    const url = imageUrlCache.get(el.dataset.thumb);
+    if (url) { state.ui.lightboxSrc = url; render(); }
+  }));
+  document.getElementById("lightboxBackdrop")?.addEventListener("click", (e) => {
+    if (e.target.id === "lightboxBackdrop" || e.target.id === "lightboxClose") { state.ui.lightboxSrc = null; render(); }
+  });
   document.querySelectorAll("[data-addimage]").forEach((btn) => btn.addEventListener("click", () => {
     const shotId = btn.dataset.addimage;
     const sh = findShot(shotId);
