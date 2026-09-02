@@ -177,8 +177,17 @@ premier connecteur éprouvé.
 
 Génération vidéo réelle pour l'étape Production, strictement limitée aux plans dont l'image test
 est déjà approuvée — jamais en masse. Comparaison des variantes, reprise ciblée en cas d'échec,
-coûts réels journalisés. Fournisseur probable : toujours Replicate (modèles vidéo), pour rester
-sous la même clé et la même architecture de proxy.
+coûts réels journalisés.
+
+Fournisseur envisagé : [TokenRouter](https://www.tokenrouter.com) (compte déjà existant chez Axel)
+plutôt que Replicate — décision prise le 2026-09-02. Pour les images tests, Replicate/FLUX.1
+[schnell] reste le bon choix (≈$0,003/image, pensé pour itérer beaucoup et pas cher). Pour la
+Production, moins de générations mais un enjeu de qualité plus élevé (ce sont les plans qui
+partent dans le montage final) : le catalogue premium de TokenRouter (ByteDance Seedream,
+Microsoft MAI-Image, OpenAI gpt-5.4-image, et ses modèles vidéo) devient pertinent malgré un coût
+par génération plus élevé, avec l'avantage d'un compte/une clé unique déjà en place pour plusieurs
+projets AiXel. À vérifier au moment venu : catalogue de modèles vidéo réellement disponibles côté
+TokenRouter et leur tarif.
 
 ## Déployer
 
