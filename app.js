@@ -167,19 +167,24 @@ async function runImageGeneration(prompt, negativePrompt) {
 // TokenRouter n'est pas documenté publiquement, alors que celui-ci l'est, réutilise le jeton
 // Replicate déjà configuré et déjà facturé chez Axel, sans nouvelle mise en place. À reconsidérer
 // si Axel confirme le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
+// Correctif du 2026-09-02 : le modèle a changé de schéma d'entrée côté Replicate depuis l'écriture
+// du connecteur initial — `num_frames` et `max_area` (qui permettaient de viser la durée du plan)
+// n'existent plus du tout (confirmé en lisant le schéma live sur replicate.com/wavespeedai/
+// wan-2.1-i2v-480p/api/schema) ; seul `aspect_ratio` ("16:9"/"9:16") reste réglable. C'est la vraie
+// cause de l'échec systématique "(E002)" qu'a rencontré Axel : on envoyait deux champs que le
+// fournisseur ne reconnaît plus, ce qui faisait planter son wrapper d'inférence accéléré à chaque
+// appel, quel que soit le plan ou l'image. La sortie est donc désormais une durée FIXE côté
+// fournisseur (~5,1s, vérifié sur un exemple public), non ajustable — le coût est fixe lui aussi.
 const VIDEO_GEN_PROVIDER = {
   id: "replicate-wan2.1-i2v-480p",
   label: "Replicate — Wan 2.1 (image→vidéo, 480p)",
   costPerSecond: 0.09, // tarif Replicate au 2026-09 (à réviser si le fournisseur change ses prix)
   fps: 16,
-  maxFrames: 100, // ≈ 6.25s à 16 im/s — plafond du modèle
+  fixedOutputSec: 81 / 16, // 5.0625s — durée fixe imposée par le fournisseur, non paramétrable
+  aspectRatio: "16:9", // seule valeur du brief projet (§ contraintes : "YouTube 16:9 en priorité")
 };
-function videoFramesFor(durSec) {
-  return Math.max(5, Math.min(VIDEO_GEN_PROVIDER.maxFrames, Math.round(durSec * VIDEO_GEN_PROVIDER.fps)));
-}
-function videoCostFor(durSec) {
-  const frames = videoFramesFor(durSec);
-  return (frames / VIDEO_GEN_PROVIDER.fps) * VIDEO_GEN_PROVIDER.costPerSecond;
+function videoCostFor() {
+  return VIDEO_GEN_PROVIDER.fixedOutputSec * VIDEO_GEN_PROVIDER.costPerSecond;
 }
 // Réutilise le même prompt que l'image test choisie (déjà validé visuellement par Axel), sans
 // jamais rien inventer de plus — juste ce qu'il a déjà écrit ailleurs dans le projet. Priorité :
@@ -225,24 +230,23 @@ async function resizeImageForVideoGen(blob, maxDim = 960, quality = 0.85) {
 // serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal. Le résultat revient
 // comme une URL Replicate (pas en base64, même limite de taille côté réponse) — le client la
 // télécharge lui-même directement pour la stocker localement.
-async function runVideoGeneration(prompt, imageBlob, durSec) {
+async function runVideoGeneration(prompt, imageBlob) {
   const resized = await resizeImageForVideoGen(imageBlob);
   const imageDataUrl = await blobToDataUrl(resized);
   if (imageDataUrl.length > 4.5 * 1024 * 1024) {
     throw new Error("Image de référence trop volumineuse même après compression — réessaie avec une autre image.");
   }
-  const frames = videoFramesFor(durSec);
   const res = await fetch("/.netlify/functions/generate-video", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, image: imageDataUrl, frames, fps: VIDEO_GEN_PROVIDER.fps }),
+    body: JSON.stringify({ prompt, image: imageDataUrl, aspectRatio: VIDEO_GEN_PROVIDER.aspectRatio }),
   });
   let data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Échec de la génération vidéo (connecteur indisponible).");
   let attempts = 0;
   while (data.status === "processing" && attempts < 90) {
     await new Promise((r) => setTimeout(r, 3000));
-    const poll = await fetch(`/.netlify/functions/generate-video-status?id=${encodeURIComponent(data.id)}&frames=${frames}`);
+    const poll = await fetch(`/.netlify/functions/generate-video-status?id=${encodeURIComponent(data.id)}`);
     data = await poll.json().catch(() => ({}));
     if (!poll.ok) throw new Error(data.error || "Échec du suivi de la génération vidéo.");
     attempts++;
@@ -252,7 +256,7 @@ async function runVideoGeneration(prompt, imageBlob, durSec) {
   const videoRes = await fetch(data.videoUrl);
   if (!videoRes.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
   const blob = await videoRes.blob();
-  return { blob, cost: data.cost != null ? data.cost : videoCostFor(durSec) };
+  return { blob, cost: data.cost != null ? data.cost : videoCostFor() };
 }
 
 // Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
@@ -1540,16 +1544,15 @@ function renderGenVideoPanel(sh, project, refImage) {
   const promptValue = buildVideoPrompt(sh, project);
   const busy = videoGenBusy.has(sh.id);
   const lastFailed = [...project.videoGenerations].reverse().find((g) => g.shotId === sh.id && g.status === "échoué");
-  const frames = videoFramesFor(sh.dur);
-  const outputSec = frames / VIDEO_GEN_PROVIDER.fps;
-  const clamped = outputSec < sh.dur - 0.05;
-  const cost = videoCostFor(sh.dur);
+  const outputSec = VIDEO_GEN_PROVIDER.fixedOutputSec;
+  const durMismatch = Math.abs(outputSec - sh.dur) > 0.3;
+  const cost = videoCostFor();
   return `
     <div class="gen-panel">
       <label class="field"><span>Prompt envoyé à la génération (repris de l'image test choisie, modifiable)</span>
         <textarea data-genvideoprompt="${sh.id}" rows="2" placeholder="Décris le mouvement/l'animation souhaitée…">${escapeHtml(promptValue)}</textarea>
       </label>
-      ${clamped ? `<div class="gen-error" style="color:var(--text-dim)">⚠ Vidéo limitée à ${outputSec.toFixed(1)}s (plafond du modèle à ${VIDEO_GEN_PROVIDER.fps} im/s) — le plan dure ${sh.dur.toFixed(1)}s.</div>` : ""}
+      ${durMismatch ? `<div class="gen-error" style="color:var(--text-dim)">⚠ Le fournisseur génère toujours ${outputSec.toFixed(1)}s de vidéo (durée fixe, non réglable) — le plan dure ${sh.dur.toFixed(1)}s. Tu pourras recadrer au montage.</div>` : ""}
       ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
       <div class="gen-row">
         <span class="gen-cost">≈ $${cost.toFixed(2)} / vidéo (${outputSec.toFixed(1)}s) · ${VIDEO_GEN_PROVIDER.label}</span>
@@ -2606,7 +2609,7 @@ function bindProductionStep(project) {
     try {
       const refBlob = await AiXelDB.getBlob(refImage.sourceId);
       if (!refBlob) throw new Error("Image de référence introuvable localement.");
-      const { blob, cost } = await runVideoGeneration(prompt, refBlob, sh.dur);
+      const { blob, cost } = await runVideoGeneration(prompt, refBlob);
       const srcId = uid();
       project.sources.push({
         id: srcId, name: `vidéo_${shotId.slice(0, 6)}_${Date.now().toString(36).slice(-4)}.mp4`,
