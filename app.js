@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V1 · 2026-09-01 (analyse audio locale)";
+const BUILD = "V1.5 · 2026-09-02 (brief créatif, bibles visuelles)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -35,6 +35,41 @@ const CATEGORIES = {
   autre: { label: "Autres", icon: "•" },
 };
 const ROLE_OPTIONS = ["Source", "Référence", "Brouillon", "Livrable"];
+
+// Les six directions créatives (Product Architecture 1.0, §4) — des grammaires de départ,
+// pas des cases qui limitent la description libre.
+const DIRECTIONS = [
+  { id: "recit", name: "Récit cinématographique", desc: "Chanson racontée comme un court métrage — histoire, progression, personnages, continuité forte des lieux et actions." },
+  { id: "performance", name: "Performance d'artiste", desc: "L'interprète au centre — présence, émotion, chant, jeu, caméra. Studio, concert ou décor conceptuel." },
+  { id: "poesie", name: "Poésie symbolique", desc: "Un monde construit à partir de métaphores et de motifs — narration non littérale, associations visuelles." },
+  { id: "visualmelody", name: "Visual Melody", desc: "Vidéo abstraite ou semi-abstraite réactive à l'audio — réutilise les six moteurs Visual Melody, faible coût." },
+  { id: "paroles", name: "Paroles en mouvement", desc: "Les mots et leur rythme au premier plan — lisibilité, phrasé, typographie, accentuation." },
+  { id: "hybride", name: "Hybride dirigé", desc: "Une approche différente par section musicale (ex. intro Visual Melody, couplet narratif, refrain performance)." },
+];
+
+// Le brief structuré (§5) — la description libre reste toujours visible à côté, jamais écrasée.
+const BRIEF_FIELDS = [
+  { key: "emotion", label: "Émotion recherchée", placeholder: "Ex. fierté ironique, euphorie nocturne…" },
+  { key: "public", label: "Public visé", placeholder: "Ex. fans existants, communauté BMW, Montréal…" },
+  { key: "monde", label: "Monde et époque", placeholder: "Ex. Montréal contemporain, nuit électrique…" },
+  { key: "personnages", label: "Personnages", placeholder: "Ex. MAT, ses amis…" },
+  { key: "action", label: "Action (ou absence d'action)", placeholder: "Ex. une virée nocturne, un cycle qui se répète…" },
+  { key: "palette", label: "Palette", placeholder: "Ex. navy, bleu électrique, magenta, or…" },
+  { key: "camera", label: "Mouvement de caméra", placeholder: "Ex. travellings avant en voiture, plans rapprochés…" },
+  { key: "style", label: "Réalisme ou stylisation", placeholder: "Ex. semi-réaliste 3D, 70% réalisme / 30% expressif…" },
+  { key: "motifs", label: "Motifs récurrents", placeholder: "Ex. la roue qui tourne, le cycle qui recommence…" },
+  { key: "obligatoires", label: "Éléments obligatoires", placeholder: "Ex. logo AiXel Studio au générique…" },
+  { key: "interdits", label: "Éléments interdits", placeholder: "Ex. logos automobiles visibles, image dangereuse…" },
+  { key: "references", label: "Références artistiques", placeholder: "Ex. Léo Cool, clips de nuit néon…" },
+  { key: "contraintes", label: "Contraintes de budget et de plateforme", placeholder: "Ex. YouTube 16:9 d'abord, coûts à surveiller…" },
+];
+
+// Bibles visuelles / Canon Library (§8.5) — fiches réutilisables : personnages, tenues, objets,
+// véhicules, lieux, palettes, styles. Chaque propriété est obligatoire, préférée ou interdite.
+const CANON_CATEGORIES = {
+  personnage: "Personnage", tenue: "Tenue", objet: "Objet", vehicule: "Véhicule",
+  lieu: "Lieu", palette: "Palette", style: "Style",
+};
 
 const STRUCTURE = [
   { id: "intro", label: "Intro", tag: "Installation", start: 0, energy: 32, dur: 17 },
@@ -99,6 +134,18 @@ function freshSteps(doneIds = [], activeId = "sources") {
   return STEP_DEFS.map((s) => ({ ...s, status: doneIds.includes(s.id) ? "done" : s.id === activeId ? "active" : "pending" }));
 }
 
+function defaultBrief() {
+  return {
+    direction: null,
+    description: "",
+    fields: Object.fromEntries(BRIEF_FIELDS.map((f) => [f.key, ""])),
+    locked: false,
+    lockedAt: null,
+  };
+}
+function tagsToText(arr) { return (arr || []).join(", "); }
+function textToTags(s) { return (s || "").split(",").map((x) => x.trim()).filter(Boolean); }
+
 function newProjectRecord(name, artist) {
   const now = Date.now();
   return {
@@ -116,8 +163,20 @@ function newProjectRecord(name, artist) {
     playedRatio: 0,
     structure: [],
     decision: { selected: null, locked: false, lockedAt: null },
+    brief: defaultBrief(),
+    canon: [],
+    canonLocked: false,
     creditsAvoided: 0,
   };
+}
+
+// Rétrocompatibilité : les projets créés avant V1.5 (ex. sur le navigateur d'Axel) n'ont pas
+// encore brief/canon en mémoire locale — on les complète sans toucher au reste.
+function migrateProject(p) {
+  if (!p.brief) p.brief = defaultBrief();
+  if (!p.canon) p.canon = [];
+  if (p.canonLocked == null) p.canonLocked = false;
+  return p;
 }
 
 function demoProjectRecord() {
@@ -128,7 +187,7 @@ function demoProjectRecord() {
     artist: "MAT",
     createdAt: now,
     updatedAt: now,
-    steps: freshSteps(["sources", "audio", "bibles"], "carte"),
+    steps: freshSteps(["sources", "audio", "brief", "bibles"], "carte"),
     activeStepId: "carte",
     sources: [
       { id: "src-1", name: "BMW_BNC.wav", size: 31_800_000, mime: "audio/wav", category: "audio", role: "Source", addedAt: now, demo: true },
@@ -142,6 +201,59 @@ function demoProjectRecord() {
     playedRatio: 0.28,
     structure: STRUCTURE,
     decision: { selected: null, locked: false, lockedAt: null },
+    brief: {
+      direction: "hybride",
+      description: "Une virée nocturne à Montréal : MAT roule, ses amis, une soirée qui coûte cher — mais il assume, avec le sourire. Le cycle (roue, transaction, verre, chanson) qui recommence, pas de morale, juste l'énergie et l'ironie tranquille.",
+      fields: {
+        ...Object.fromEntries(BRIEF_FIELDS.map((f) => [f.key, ""])),
+        emotion: "fierté ironique, euphorie nocturne",
+        public: "communauté AiXel Studio, amateurs de BMW, Montréal",
+        monde: "Montréal contemporain, nuit électrique",
+        personnages: "MAT et ses amis",
+        action: "une virée nocturne qui referme le cycle sur lui-même",
+        palette: "navy profond, bleu électrique, magenta, or discret",
+        camera: "travellings avant en voiture, plans rapprochés sur les réflexions néon",
+        style: "3D semi-réaliste, environ 70% réalisme / 30% animation expressive",
+        motifs: "la roue qui tourne, le cercle de transaction bancaire, le rebord du verre",
+        obligatoires: "générique AiXel Studio officiel au final",
+        interdits: "logos automobiles ou bancaires visibles sur MAT, image dangereuse ou criminelle",
+        references: "univers de Léo Cool, clips de nuit néon",
+        contraintes: "YouTube 16:9 en priorité, coûts de génération à surveiller",
+      },
+      locked: true,
+      lockedAt: now,
+    },
+    canon: [
+      {
+        id: "canon-mat", category: "personnage", name: "MAT", sourceId: "src-3",
+        description: "24 ans, Montréal, origines suisses-brésiliennes. Détendu, confiant, humour lucide sur ses dépenses.",
+        obligatoire: ["teint chaud", "cheveux bouclés foncés", "lunettes rectangulaires teintées", "moustache fine", "bouc léger", "blouson bombardier bleu marine", "montre dorée", "petite croix dorée"],
+        prefere: ["demi-sourire calme", "mains dans les poches"],
+        interdit: ["vieillir ou rajeunir le personnage", "devenir Léo Cool", "persona de course agressive", "costume formel", "anatomie de super-héros"],
+        status: "verrouillé", createdAt: now,
+      },
+      {
+        id: "canon-bmw", category: "vehicule", name: "BMW nocturne", sourceId: null,
+        description: "Le véhicule au centre du clip — reflets de ville, roue comme motif rythmique récurrent.",
+        obligatoire: ["cohérent d'un plan à l'autre"],
+        prefere: ["reflets néon sur la carrosserie"],
+        interdit: ["logo BMW visible en gros plan (image de marque, pas de placement produit)"],
+        status: "verrouillé", createdAt: now,
+      },
+      {
+        id: "canon-montreal", category: "lieu", name: "Montréal nocturne", sourceId: null,
+        description: "Suggérée par l'atmosphère et la texture urbaine — pas besoin de repères touristiques dans chaque plan.",
+        obligatoire: [], prefere: ["néons, humidité, reflets"], interdit: ["clichés touristiques répétés"],
+        status: "approuvé", createdAt: now,
+      },
+      {
+        id: "canon-palette", category: "palette", name: "Palette night-driving", sourceId: null,
+        description: "La palette qui unifie tout le clip.",
+        obligatoire: ["navy profond", "bleu électrique", "magenta"], prefere: ["or chaud discret"], interdit: [],
+        status: "verrouillé", createdAt: now,
+      },
+    ],
+    canonLocked: true,
     creditsAvoided: 340,
   };
 }
@@ -159,13 +271,15 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      return { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
+      const merged = { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
+      Object.values(merged.projects).forEach(migrateProject);
+      return merged;
     }
     // Migration depuis la V0 (un seul projet BMW/BNC codé en dur)
     const old = localStorage.getItem(OLD_STORAGE_KEY);
     if (old) {
       const parsedOld = JSON.parse(old);
-      const demo = { ...demoProjectRecord(), ...parsedOld, sources: demoProjectRecord().sources, sourcesLocked: true };
+      const demo = migrateProject({ ...demoProjectRecord(), ...parsedOld, sources: demoProjectRecord().sources, sourcesLocked: true });
       return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
     }
     return defaultState();
@@ -304,7 +418,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <div class="mark">A</div>
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V1"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V1.5"}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
@@ -348,6 +462,8 @@ function renderMain(project, step) {
   if (step.id === "sources") return `<div class="crumb">${crumb}</div>` + renderSourcesStep(project);
   if (step.id === "audio") return `<div class="crumb">${crumb}</div>` + renderAudioStep(project);
   if (step.id === "carte" && project.audio) return `<div class="crumb">${crumb}</div>` + renderCarteMusicale(project);
+  if (step.id === "brief") return `<div class="crumb">${crumb}</div>` + renderBriefStep(project);
+  if (step.id === "bibles") return `<div class="crumb">${crumb}</div>` + renderBiblesStep(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
@@ -422,6 +538,140 @@ function profileFromEnergy(avg) {
   if (avg >= 0.6) return "Énergique";
   if (avg >= 0.35) return "Équilibré";
   return "Doux";
+}
+
+// ---------- Étape Brief créatif ----------
+
+function renderBriefStep(project) {
+  const b = project.brief;
+  const locked = b.locked;
+  return `
+    <div class="page-head">
+      <h1>Brief créatif</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Brief approuvé" : "À structurer"}</span>
+    </div>
+    <p class="page-sub">Choisis une direction créative, décris librement ton intention, puis précise les points clés. Ta description originale reste toujours visible — rien ne l'écrase jamais.</p>
+
+    ${locked ? `<div class="locked-banner">🔒 Brief verrouillé — référence pour les bibles visuelles, l'histoire et le storyboard.
+      <button class="btn small reopen" id="reopenBrief">Rouvrir</button></div>` : ""}
+
+    <div class="card">
+      <h2>Direction créative</h2>
+      <div class="direction-grid">
+        ${DIRECTIONS.map((d) => `
+          <button class="direction-card ${b.direction === d.id ? "selected" : ""}" data-direction="${d.id}" ${locked ? "disabled" : ""}>
+            <b>${d.name}</b>
+            <p>${d.desc}</p>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Description libre</h2>
+      <textarea id="briefDescription" class="brief-textarea" rows="5" placeholder="Décris ton intention avec tes mots — ambiance, histoire, ce que tu veux ressentir…" ${locked ? "disabled" : ""}>${escapeHtml(b.description)}</textarea>
+    </div>
+
+    <div class="card">
+      <h2>Brief structuré</h2>
+      <p class="page-sub" style="margin-top:-6px">Optionnel, mais aide l'histoire et le storyboard à rester cohérents avec ton intention.</p>
+      <div class="field-grid">
+        ${BRIEF_FIELDS.map((f) => `
+          <label class="field">
+            <span>${f.label}</span>
+            <input type="text" data-field="${f.key}" value="${escapeAttr(b.fields[f.key] || "")}" placeholder="${escapeAttr(f.placeholder)}" ${locked ? "disabled" : ""} />
+          </label>
+        `).join("")}
+      </div>
+    </div>
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller le brief</h3>
+          <p>Une direction et une description sont nécessaires. Cette intention devient la référence pour les bibles visuelles, l'histoire et le storyboard.</p>
+        </div>
+        <div class="decision-actions">
+          <button class="btn primary" id="lockBrief" ${b.direction && b.description.trim() ? "" : "disabled"}>Verrouiller le brief →</button>
+        </div>
+      </div>
+    ` : ""}
+  `;
+}
+
+// ---------- Étape Bibles visuelles (Canon Library) ----------
+
+function renderBiblesStep(project) {
+  const locked = project.canonLocked;
+  const briefReady = project.brief && project.brief.locked;
+  return `
+    <div class="page-head">
+      <h1>Bibles visuelles</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Bibles verrouillées" : `${project.canon.length} référence${project.canon.length === 1 ? "" : "s"}`}</span>
+    </div>
+    <p class="page-sub">Fiches canoniques pour personnages, tenues, véhicules, lieux, palettes et styles — réutilisables dans ce projet et les suivants. Chaque propriété peut être obligatoire, préférée ou interdite.</p>
+    ${!briefReady && !locked ? `<div class="dup-banner">ℹ️ Le brief créatif n'est pas encore verrouillé — tu peux commencer les bibles, mais elles seront plus solides une fois l'intention fixée.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Bibles visuelles verrouillées — référence obligatoire pour le storyboard et le contrôle de continuité.
+      <button class="btn small reopen" id="reopenBibles">Rouvrir</button></div>` : ""}
+
+    ${!locked ? `<button class="btn ghost" id="addCanon" style="margin-bottom:14px">+ Nouvelle référence</button>` : ""}
+
+    ${project.canon.length === 0 ? `<div class="card"><div class="empty-hint">Aucune référence pour l'instant — personnages, véhicules, lieux, palettes…</div></div>` : `
+      <div class="canon-grid">
+        ${project.canon.map((c) => renderCanonCard(c, project, locked)).join("")}
+      </div>
+    `}
+
+    ${!locked && project.canon.length > 0 ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller les bibles</h3>
+          <p>Ces références deviennent obligatoires pour le storyboard, les images tests et le contrôle de continuité.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockBibles">Verrouiller les bibles →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderCanonCard(c, project, locked) {
+  const imgSources = project.sources.filter((s) => s.category === "image" || s.category === "logo");
+  return `
+    <div class="card canon-card">
+      <div class="canon-top">
+        <select class="canon-category" data-canoncat="${c.id}" ${locked ? "disabled" : ""}>
+          ${Object.entries(CANON_CATEGORIES).map(([k, v]) => `<option value="${k}" ${k === c.category ? "selected" : ""}>${v}</option>`).join("")}
+        </select>
+        <span class="status-chip small ${c.status === "verrouillé" ? "" : "chip-pending"}">${c.status}</span>
+        ${!locked ? `<button class="src-del" data-delcanon="${c.id}" aria-label="Retirer" style="margin-left:auto">✕</button>` : ""}
+      </div>
+      <input class="canon-name" data-canonname="${c.id}" value="${escapeAttr(c.name)}" placeholder="Nom (ex. MAT, BMW nocturne…)" ${locked ? "disabled" : ""} />
+      <textarea class="canon-desc" data-canondesc="${c.id}" rows="2" placeholder="Description courte…" ${locked ? "disabled" : ""}>${escapeHtml(c.description)}</textarea>
+      ${imgSources.length ? `
+        <label class="field"><span>Image de référence</span>
+          <select data-canonsrc="${c.id}" ${locked ? "disabled" : ""}>
+            <option value="">—</option>
+            ${imgSources.map((s) => `<option value="${s.id}" ${s.id === c.sourceId ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}
+          </select>
+        </label>
+      ` : ""}
+      <label class="field"><span>Obligatoire</span><input type="text" data-canonoblig="${c.id}" value="${escapeAttr(tagsToText(c.obligatoire))}" placeholder="séparés par des virgules" ${locked ? "disabled" : ""} /></label>
+      <label class="field"><span>Préféré</span><input type="text" data-canonpref="${c.id}" value="${escapeAttr(tagsToText(c.prefere))}" placeholder="séparés par des virgules" ${locked ? "disabled" : ""} /></label>
+      <label class="field"><span>Interdit</span><input type="text" data-canoninterdit="${c.id}" value="${escapeAttr(tagsToText(c.interdit))}" placeholder="séparés par des virgules" ${locked ? "disabled" : ""} /></label>
+      ${!locked ? `
+        <label class="field"><span>État</span>
+          <select data-canonstatus="${c.id}">
+            <option value="proposé" ${c.status === "proposé" ? "selected" : ""}>Proposé</option>
+            <option value="approuvé" ${c.status === "approuvé" ? "selected" : ""}>Approuvé</option>
+            <option value="verrouillé" ${c.status === "verrouillé" ? "selected" : ""}>Verrouillé</option>
+          </select>
+        </label>
+      ` : ""}
+    </div>
+  `;
 }
 
 // ---------- Étape Sources et inventaire ----------
@@ -664,6 +914,42 @@ function bindCarteMusicaleAudio(project) {
   });
 }
 
+const CANON_GRADIENTS = {
+  personnage: "linear-gradient(135deg,#1c2c46,#3fd6f5 140%)",
+  tenue: "linear-gradient(135deg,#1c2c46,#3fd6f5 140%)",
+  vehicule: "linear-gradient(135deg,#2a1f3d,#f26fd0 160%)",
+  objet: "linear-gradient(135deg,#2a1f3d,#f26fd0 160%)",
+  lieu: "linear-gradient(135deg,#122436,#3fd6f5 150%)",
+  palette: "linear-gradient(135deg,#241d10,#e8b95c 160%)",
+  style: "linear-gradient(135deg,#241d10,#e8b95c 160%)",
+};
+
+// Réel pour tout projet non-démo : les références de la bible verrouillées y apparaissent
+// dès qu'il y en a, plutôt que le hardcodé du pilote BMW/BNC.
+function renderLockedRefs(project, isDemo) {
+  if (isDemo) {
+    return `
+      <div class="rail-h">Références verrouillées <button class="link-btn">Tout voir</button></div>
+      <div class="ref-grid">
+        <div class="ref-item first" style="background:linear-gradient(135deg,#1c2c46,#3fd6f5 140%)"><div class="cap">MAT · Canon v1</div></div>
+        <div class="ref-item" style="background:linear-gradient(135deg,#2a1f3d,#f26fd0 160%)"><div class="cap">Neon Drive</div></div>
+        <div class="ref-item" style="background:linear-gradient(135deg,#241d10,#e8b95c 160%)"><div class="cap">Logo AiXel</div></div>
+      </div>
+    `;
+  }
+  const locked = project.canon.filter((c) => c.status === "verrouillé");
+  return `
+    <div class="rail-h">Références verrouillées</div>
+    ${locked.length ? `
+      <div class="ref-grid">
+        ${locked.slice(0, 6).map((c, i) => `
+          <div class="ref-item ${i === 0 ? "first" : ""}" style="background:${CANON_GRADIENTS[c.category] || CANON_GRADIENTS.style}"><div class="cap">${escapeHtml(c.name || CANON_CATEGORIES[c.category])}</div></div>
+        `).join("")}
+      </div>
+    ` : `<div class="empty-hint">Aucune référence verrouillée — les bibles visuelles arrivent après la carte musicale.</div>`}
+  `;
+}
+
 function renderRightRail(project) {
   const score = progressPct(project);
   const isDemo = project.id === "bmw-bnc";
@@ -682,14 +968,7 @@ function renderRightRail(project) {
         <div class="alert ok"><span class="tag">Valide</span><b>Identité de MAT stable</b><p>Visage, lunettes, bomber et bijoux reconnus sur les références.</p></div>
       ` : `<div class="empty-hint">Pas encore d'alertes — importe des sources et avance dans les étapes pour activer les vérifications de continuité.</div>`}
 
-      <div class="rail-h">Références verrouillées ${isDemo ? '<button class="link-btn">Tout voir</button>' : ""}</div>
-      ${isDemo ? `
-        <div class="ref-grid">
-          <div class="ref-item first" style="background:linear-gradient(135deg,#1c2c46,#3fd6f5 140%)"><div class="cap">MAT · Canon v1</div></div>
-          <div class="ref-item" style="background:linear-gradient(135deg,#2a1f3d,#f26fd0 160%)"><div class="cap">Neon Drive</div></div>
-          <div class="ref-item" style="background:linear-gradient(135deg,#241d10,#e8b95c 160%)"><div class="cap">Logo AiXel</div></div>
-        </div>
-      ` : `<div class="empty-hint">Aucune référence verrouillée — les bibles visuelles arrivent après la carte musicale.</div>`}
+      ${renderLockedRefs(project, isDemo)}
 
       <button class="btn primary prep-btn" id="prepBtn" ${project.decision.locked ? "" : "disabled"}>Préparer l'animatique →</button>
     </aside>
@@ -711,6 +990,8 @@ function bindCockpit(project) {
   bindNewProjectModal();
   bindSourcesStep(project);
   bindAudioStep(project);
+  bindBriefStep(project);
+  bindBiblesStep(project);
 
   if (project.activeStepId === "carte" && project.audio) {
     bindCarteMusicaleAudio(project);
@@ -837,6 +1118,92 @@ function bindAudioStep(project) {
     project.audioLocked = false;
     const step = project.steps.find((s) => s.id === "audio"); if (step) step.status = "active";
     const next = project.steps.find((s) => s.id === "carte"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindBriefStep(project) {
+  const b = project.brief;
+  document.querySelectorAll("[data-direction]").forEach((btn) => btn.addEventListener("click", () => {
+    if (b.locked) return;
+    b.direction = btn.dataset.direction;
+    touch(project); persist(); render();
+  }));
+  const desc = document.getElementById("briefDescription");
+  // Re-rend ici (contrairement au title-input de la carte musicale) car ce champ conditionne
+  // l'activation du bouton "Verrouiller le brief" — sans re-rendu l'état du bouton resterait périmé.
+  if (desc) desc.addEventListener("change", () => { b.description = desc.value; touch(project); persist(); render(); });
+  document.querySelectorAll("[data-field]").forEach((input) => input.addEventListener("change", () => {
+    b.fields[input.dataset.field] = input.value; touch(project); persist();
+  }));
+  document.getElementById("lockBrief")?.addEventListener("click", () => {
+    if (!b.direction || !b.description.trim()) return;
+    b.locked = true; b.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "brief"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "bibles"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Brief créatif verrouillé.");
+  });
+  document.getElementById("reopenBrief")?.addEventListener("click", () => {
+    b.locked = false;
+    const step = project.steps.find((s) => s.id === "brief"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "bibles"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindBiblesStep(project) {
+  document.getElementById("addCanon")?.addEventListener("click", () => {
+    project.canon.push({
+      id: uid(), category: "personnage", name: "", description: "",
+      obligatoire: [], prefere: [], interdit: [], sourceId: null, status: "proposé", createdAt: Date.now(),
+    });
+    touch(project); persist(); render();
+  });
+  document.querySelectorAll("[data-delcanon]").forEach((btn) => btn.addEventListener("click", () => {
+    project.canon = project.canon.filter((c) => c.id !== btn.dataset.delcanon);
+    touch(project); persist(); render();
+  }));
+  const findCanon = (id) => project.canon.find((c) => c.id === id);
+  document.querySelectorAll("[data-canoncat]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canoncat); if (c) { c.category = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canonname]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canonname); if (c) { c.name = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canondesc]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canondesc); if (c) { c.description = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canonsrc]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canonsrc); if (c) { c.sourceId = el.value || null; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canonoblig]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canonoblig); if (c) { c.obligatoire = textToTags(el.value); touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canonpref]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canonpref); if (c) { c.prefere = textToTags(el.value); touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canoninterdit]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canoninterdit); if (c) { c.interdit = textToTags(el.value); touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-canonstatus]").forEach((el) => el.addEventListener("change", () => {
+    const c = findCanon(el.dataset.canonstatus); if (c) { c.status = el.value; touch(project); persist(); }
+  }));
+  document.getElementById("lockBibles")?.addEventListener("click", () => {
+    if (!project.canon.length) return;
+    project.canonLocked = true;
+    project.canon.forEach((c) => { c.status = "verrouillé"; });
+    const step = project.steps.find((s) => s.id === "bibles"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "histoire"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Bibles visuelles verrouillées.");
+  });
+  document.getElementById("reopenBibles")?.addEventListener("click", () => {
+    project.canonLocked = false;
+    const step = project.steps.find((s) => s.id === "bibles"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "histoire"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
 }

@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V1)
+# AiXel VideoGenerator — reprise en code source (V0 → V1.5)
 
 ## Pourquoi cette reconstruction
 
@@ -61,11 +61,39 @@ sans étape de build — exactement le même choix technique que pour `aixeln-ly
   BMW/BNC reste en données de démonstration (pas de fichier audio réel stocké), donc son bouton lecture
   affiche honnêtement "fichier introuvable localement" plutôt que de faire semblant.
 
-## Prochaine étape (V1.5 — Brief créatif et bibles visuelles)
+## V1.5 — Direction artistique : brief créatif et bibles visuelles (fait)
 
-Brancher les étapes suivantes du pipeline (brief créatif, bibles visuelles) sur les vraies données de
-sources et d'analyse audio désormais disponibles, avant d'envisager toute génération IA (qui nécessitera
-la même architecture "clé API jamais côté client" que pour AiXeLN).
+Toujours 100% local, sans clé IA — cette tranche est de la structuration assistée par l'interface,
+pas de la génération. Basée directement sur `AiXel_VideoGenerator_Product_Architecture_1.0.md` (§4, §5,
+§8.4, §8.5) et sur `MAT_Avatar_Character_Bible.md` comme référence concrète pour la forme d'une bible.
+
+- **Brief créatif** : les six directions créatives du document d'architecture (récit cinématographique,
+  performance d'artiste, poésie symbolique, Visual Melody, paroles en mouvement, hybride dirigé) comme
+  grammaires de départ sélectionnables, une description libre — **toujours visible, jamais écrasée** —
+  et un brief structuré optionnel (émotion, public, monde, personnages, action, palette, caméra, style,
+  motifs, éléments obligatoires/interdits, références, contraintes). Verrouillable/réouvrable comme les
+  autres barrières ; devient la référence pour les bibles visuelles, l'histoire et le storyboard.
+- **Bibles visuelles (Canon Library)** : fiches canoniques réutilisables — personnage, tenue, objet,
+  véhicule, lieu, palette, style — chacune avec une image de référence optionnelle (liée aux sources
+  déjà importées), et trois listes de propriétés : obligatoire / préférée / interdite. Chaque fiche a
+  un état (proposé/approuvé/verrouillé) ; verrouiller l'étape fige l'ensemble pour le storyboard et le
+  futur contrôle de continuité.
+- **Bibliothèque de droite connectée aux vraies données** : le panneau "Références verrouillées"
+  affiche désormais les fiches réellement verrouillées d'un projet (pas seulement la démo BMW/BNC).
+- **Projet pilote BMW/BNC enrichi** : son brief (direction Hybride dirigé) et ses quatre bibles
+  (MAT, BMW nocturne, Montréal nocturne, palette night-driving) sont maintenant des données structurées
+  réelles plutôt que du texte de démonstration statique — directement dérivées de la fiche personnage
+  MAT déjà rédigée.
+- **Migration silencieuse** : les projets créés avant cette version (ex. "Children's In The Storm")
+  reçoivent automatiquement un brief et des bibles vides au premier chargement, sans rien perdre de
+  leurs sources ou de leur analyse audio.
+
+## Prochaine étape (V2 — Histoire et storyboard)
+
+Relier la carte musicale, le brief et les bibles pour proposer une histoire et des motifs adaptés à la
+durée réelle de la chanson, puis un storyboard minuté avec prompts structurés, références par plan et
+estimation des coûts. Toujours pas de génération IA à ce stade — la génération arrivera en V3, avec
+la même architecture "clé API jamais côté client" que pour AiXeLN.
 
 ## Déployer
 
@@ -91,3 +119,11 @@ npx netlify-cli deploy --prod
 - `db.js` — wrapper IndexedDB (`AiXelDB`) pour le stockage des fichiers binaires
 - `audio-analysis.js` — analyse audio locale (`AiXelAudio`), portée depuis AiXel Visual Melody
 - `netlify.toml` — déploiement statique simple
+
+## Sources de conception
+
+Les documents fournis par Axel (`AiXel_VideoGenerator_Product_Architecture_1.0.md`,
+`AiXel_VideoGenerator_Product_Blueprint.md`, `AiXel_Studio_Video_Workflow_Reference.md`,
+`MAT_Avatar_Character_Bible.md`) restent la référence de conception pour les étapes à venir
+(Histoire, Storyboard, Image Lab, Animatique, Production, Continuité, Qualité & exports) — non
+reproduits ici, mais chaque décision d'architecture de ce dépôt s'y aligne.
