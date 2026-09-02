@@ -1,6 +1,14 @@
 [build]
   publish = "."
 
-# Site 100% statique pour l'instant (V0 — cockpit seul, décisions en localStorage).
-# Aucune fonction serveur nécessaire tant que l'import de sources et l'IA ne sont pas branchés
-# (V0.5 et suivants — voir README.md).
+[functions]
+  directory = "netlify/functions"
+
+# Le cockpit (index.html/app.js/styles.css) reste un site 100% statique, sans étape de build,
+# décisions en localStorage — inchangé depuis V0.
+#
+# V3 (§8.10 Production Router) ajoute deux fonctions serveur pour le connecteur de génération
+# d'images (Images tests → Replicate, modèle FLUX.1 [schnell]) : netlify/functions/generate-image.js
+# et generate-image-status.js. Elles ont besoin d'une variable d'environnement REPLICATE_API_TOKEN
+# — à ajouter dans Site settings → Environment variables sur app.netlify.com (jamais dans ce dépôt).
+# Sans elle, le bouton "Générer une image test" reste utilisable mais échoue avec un message clair.

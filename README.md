@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V2.5)
+# AiXel VideoGenerator — reprise en code source (V0 → V3)
 
 ## Pourquoi cette reconstruction
 
@@ -141,11 +141,44 @@ V3). Basée sur `AiXel_VideoGenerator_Product_Architecture_1.0.md` (§8.8, §8.9
   fait planter Histoire/Storyboard/Images/Animatique à la première visite. Corrigé en passant aussi
   le projet démo par `migrateProject()` au démarrage.
 
-## Prochaine étape (V3 — Production assistée)
+## V3 — premier connecteur de génération (images tests) (fait)
 
-Premier connecteur de génération d'images/vidéo, mais uniquement pour les plans approuvés — jamais
-en masse. Versions, coûts réels et reprise ciblée en cas d'échec, comparaison des variantes. La
-génération arrivera avec la même architecture "clé API jamais côté client" que pour AiXeLN.
+Premier vrai appel à un fournisseur d'IA payant, volontairement limité aux **images tests**
+(Image Lab) plutôt qu'à la Production par plans — moins cher, plus rapide à itérer, conforme au
+principe "aucun rendu coûteux comme test d'interface" (§13). La génération vidéo pour la Production
+(plans approuvés uniquement, jamais en masse — §8.10) viendra dans une tranche suivante une fois ce
+premier connecteur éprouvé.
+
+- **Fournisseur** : [Replicate](https://replicate.com), modèle `black-forest-labs/flux-schnell`
+  (~$0,003/image au tarif Replicate de 2026-09 — à réviser si le fournisseur change ses prix).
+  Choisi pour son modèle pay-as-you-go sans abonnement et parce qu'il héberge aussi des modèles
+  vidéo sous la même clé, utile pour la suite.
+- **Clé API jamais côté client** : même architecture que pour AiXeLN. Deux fonctions serveur
+  (`netlify/functions/generate-image.js` et `generate-image-status.js`) font office de proxy —
+  elles lisent `REPLICATE_API_TOKEN` en variable d'environnement Netlify, jamais présente dans le
+  dépôt ni envoyée au navigateur. Le connecteur reste normalisé côté client (prompt/negative_prompt
+  en entrée, image + coût en sortie) : changer de fournisseur plus tard ne touchera que ces deux
+  fichiers (§10, principe de portabilité).
+- **Dans Images tests** : chaque plan a un panneau de génération avec un prompt pré-rempli à partir
+  de l'action/décor/caméra du plan et des propriétés obligatoires des bibles visuelles liées
+  (modifiable avant d'envoyer), le coût affiché *avant* de cliquer, et un bouton "Générer une image
+  test". Le résultat est rapatrié et stocké localement (IndexedDB, comme n'importe quelle source
+  importée) puis ajouté directement comme candidat du plan — badge "IA" pour le distinguer d'une
+  image importée. Chaque tentative (réussie ou échouée) est journalisée dans `project.generations`
+  (fournisseur, modèle, prompt, coût, date, décision — §9), et le total dépensé sur le projet
+  s'affiche en haut de l'étape.
+- **Configuration nécessaire avant que ça fonctionne réellement** : créer un compte
+  [replicate.com](https://replicate.com), générer un jeton API, puis l'ajouter comme variable
+  d'environnement `REPLICATE_API_TOKEN` dans *Site settings → Environment variables* du site Netlify
+  (`aixel-videogenerator`), puis redéployer. Sans cette clé, le bouton reste utilisable mais échoue
+  proprement avec un message clair plutôt qu'une erreur muette.
+
+## Prochaine étape (V3.5 — Production par plans : génération vidéo)
+
+Génération vidéo réelle pour l'étape Production, strictement limitée aux plans dont l'image test
+est déjà approuvée — jamais en masse. Comparaison des variantes, reprise ciblée en cas d'échec,
+coûts réels journalisés. Fournisseur probable : toujours Replicate (modèles vidéo), pour rester
+sous la même clé et la même architecture de proxy.
 
 ## Déployer
 

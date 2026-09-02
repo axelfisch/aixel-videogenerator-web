@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V2.5 · 2026-09-02 (image lab, animatique)";
+const BUILD = "V3 · 2026-09-02 (connecteur de génération d'images)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -102,6 +102,60 @@ function defaultShotImage(sourceId) {
 }
 function defaultImagelab() { return { locked: false, lockedAt: null }; }
 function defaultAnimatic() { return { locked: false, lockedAt: null }; }
+
+// V3 (§8.10 Production Router) — premier connecteur de génération, réservé aux images tests
+// (moins cher, plus rapide à itérer que la vidéo — §13 "aucun rendu coûteux comme test
+// d'interface"). L'appel réel passe par des fonctions Netlify (netlify/functions/generate-image*)
+// qui gardent la clé API côté serveur ; le client ne connaît que ce fournisseur normalisé.
+const GEN_PROVIDER = { id: "replicate-flux-schnell", label: "Replicate — FLUX.1 [schnell]", costPerImage: 0.003 };
+const genBusy = new Set(); // ids de plans en cours de génération (état transitoire, pas persisté)
+
+// Compose le prompt envoyé au fournisseur à partir du plan (action/décor/caméra), des bibles
+// visuelles verrouillées liées (propriétés obligatoires) et du brief (palette/style) — jamais
+// inventé : uniquement ce qu'Axel a déjà écrit ailleurs dans le projet.
+function buildImagePrompt(sh, project) {
+  const refs = shotCanonRefs(sh, project);
+  const oblig = [...new Set(refs.flatMap((c) => c.obligatoire || []))];
+  const bits = [];
+  const base = sh.prompt || sh.action || "";
+  if (base.trim()) bits.push(base.trim());
+  if (sh.decor && !bits.some((b) => b.includes(sh.decor))) bits.push(sh.decor);
+  if (sh.camera) bits.push(sh.camera);
+  if (oblig.length) bits.push(oblig.join(", "));
+  if (project.brief.fields.palette) bits.push(project.brief.fields.palette);
+  if (project.brief.fields.style) bits.push(project.brief.fields.style);
+  return bits.filter(Boolean).join(", ");
+}
+function buildNegativePrompt(sh, project) {
+  const refs = shotCanonRefs(sh, project);
+  const interdit = [...new Set(refs.flatMap((c) => c.interdit || []))];
+  const globalInterdit = textToTags(project.brief.fields.interdits);
+  return [...new Set([...interdit, ...globalInterdit])].join(", ");
+}
+
+// Appelle le proxy Netlify (jamais le fournisseur directement) et renvoie un Blob prêt à stocker
+// localement. Attend la réponse synchrone (~1-3s pour FLUX.1 schnell) puis, si besoin, interroge
+// generate-image-status.js jusqu'à un état terminal.
+async function runImageGeneration(prompt, negativePrompt) {
+  const res = await fetch("/.netlify/functions/generate-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, negativePrompt }),
+  });
+  let data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Échec de la génération (connecteur indisponible).");
+  let attempts = 0;
+  while (data.status === "processing" && attempts < 40) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const poll = await fetch(`/.netlify/functions/generate-image-status?id=${encodeURIComponent(data.id)}`);
+    data = await poll.json().catch(() => ({}));
+    if (!poll.ok) throw new Error(data.error || "Échec du suivi de la génération.");
+    attempts++;
+  }
+  if (data.status !== "succeeded") throw new Error(data.error || "La génération a échoué ou a pris trop de temps.");
+  const blob = await (await fetch(`data:${data.mime || "image/png"};base64,${data.imageBase64}`)).blob();
+  return { blob, cost: data.cost != null ? data.cost : GEN_PROVIDER.costPerImage };
+}
 
 // Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
 // (l'exemple du document : intro Visual Melody, couplet narratif, refrain performance, pont poétique,
@@ -236,7 +290,7 @@ function proposeShots(project) {
         action: "", decor: "", camera: "", emotion: "",
         references: [], prompt: "",
         status: "proposé",
-        images: [], selectedImageId: null,
+        images: [], selectedImageId: null, genPrompt: null,
       });
     }
   });
@@ -276,12 +330,13 @@ function newProjectRecord(name, artist) {
     storyboard: defaultStoryboard(),
     imagelab: defaultImagelab(),
     animatic: defaultAnimatic(),
+    generations: [],
     creditsAvoided: 0,
   };
 }
 
-// Rétrocompatibilité : les projets créés avant V1.5/V2/V2.5 (ex. sur le navigateur d'Axel) n'ont
-// pas encore ces champs en mémoire locale — on les complète sans toucher au reste.
+// Rétrocompatibilité : les projets créés avant V1.5/V2/V2.5/V3 (ex. sur le navigateur d'Axel)
+// n'ont pas encore ces champs en mémoire locale — on les complète sans toucher au reste.
 function migrateProject(p) {
   if (!p.brief) p.brief = defaultBrief();
   if (!p.canon) p.canon = [];
@@ -290,9 +345,11 @@ function migrateProject(p) {
   if (!p.storyboard) p.storyboard = defaultStoryboard();
   if (!p.imagelab) p.imagelab = defaultImagelab();
   if (!p.animatic) p.animatic = defaultAnimatic();
+  if (!p.generations) p.generations = [];
   (p.storyboard.shots || []).forEach((sh) => {
     if (!sh.images) sh.images = [];
     if (sh.selectedImageId === undefined) sh.selectedImageId = null;
+    if (sh.genPrompt === undefined) sh.genPrompt = null;
   });
   return p;
 }
@@ -540,7 +597,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <div class="mark">A</div>
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V2.5"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V3"}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
@@ -972,6 +1029,8 @@ function renderImagesStep(project) {
   const locked = lab.locked;
   const imgSources = getImageSources(project);
   const selectedCount = shots.filter((s) => s.selectedImageId).length;
+  const okGens = project.generations.filter((g) => g.status === "réussi");
+  const genSpend = okGens.reduce((sum, g) => sum + (g.cost || 0), 0);
 
   if (!shots.length) {
     return `
@@ -986,9 +1045,10 @@ function renderImagesStep(project) {
       <h1>Images tests</h1>
       <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Images verrouillées" : `${selectedCount}/${shots.length} plan${shots.length > 1 ? "s" : ""} avec une image choisie`}</span>
     </div>
-    <p class="page-sub">Compare des variantes par plan et valide-les avant l'animatique — identité, composition, accessoires, texte, style. Associe des images déjà importées dans les sources ; aucune génération ici (le premier connecteur arrive en V3).</p>
+    <p class="page-sub">Compare des variantes par plan et valide-les avant l'animatique — identité, composition, accessoires, texte, style. Associe des images déjà importées dans les sources, ou génère un test directement (Replicate — FLUX.1 [schnell], ≈ $${GEN_PROVIDER.costPerImage.toFixed(3)}/image). Ce connecteur reste réservé aux tests : la génération des plans définitifs approuvés arrive avec la Production (prochaine tranche).</p>
+    ${okGens.length ? `<p class="gen-summary">✨ ${okGens.length} image${okGens.length > 1 ? "s" : ""} générée${okGens.length > 1 ? "s" : ""} ce projet · ≈ $${genSpend.toFixed(3)} dépensés</p>` : ""}
     ${!project.storyboard.locked ? `<div class="dup-banner">ℹ️ Le storyboard n'est pas encore verrouillé — les plans peuvent encore changer.</div>` : ""}
-    ${!imgSources.length ? `<div class="dup-banner">ℹ️ Aucune image importée pour l'instant — ajoute des images dans Sources pour pouvoir les tester ici.</div>` : ""}
+    ${!imgSources.length ? `<div class="dup-banner">ℹ️ Aucune image importée pour l'instant — ajoute des images dans Sources, ou génère directement un test ci-dessous.</div>` : ""}
 
     ${locked ? `<div class="locked-banner">🔒 Images tests verrouillées — référence pour l'animatique.
       <button class="btn small reopen" id="reopenImages">Rouvrir</button></div>` : ""}
@@ -1045,6 +1105,25 @@ function renderImageShotRow(sh, i, project, locked, imgSources) {
           </div>
         ` : ""}
       </div>
+      ${!locked ? renderGenPanel(sh, project) : ""}
+    </div>
+  `;
+}
+
+function renderGenPanel(sh, project) {
+  const promptValue = sh.genPrompt != null ? sh.genPrompt : buildImagePrompt(sh, project);
+  const busy = genBusy.has(sh.id);
+  const lastFailed = [...project.generations].reverse().find((g) => g.shotId === sh.id && g.status === "échoué");
+  return `
+    <div class="gen-panel">
+      <label class="field"><span>Prompt envoyé à la génération (basé sur le plan + les bibles verrouillées, modifiable)</span>
+        <textarea data-genprompt="${sh.id}" rows="2" placeholder="Décris l'image à générer…">${escapeHtml(promptValue)}</textarea>
+      </label>
+      ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
+      <div class="gen-row">
+        <span class="gen-cost">≈ $${GEN_PROVIDER.costPerImage.toFixed(3)} / image · ${GEN_PROVIDER.label}</span>
+        <button class="btn small" data-genimage="${sh.id}" ${busy ? "disabled" : ""}>${busy ? "Génération en cours…" : "✨ Générer une image test"}</button>
+      </div>
     </div>
   `;
 }
@@ -1056,7 +1135,7 @@ function renderImageCandidate(im, sh, project, locked) {
     <div class="image-card ${isSelected ? "selected" : ""}">
       <div class="src-thumb" data-thumb="${im.sourceId}" style="width:100%;aspect-ratio:16/9;border-radius:0">${imageUrlCache.get(im.sourceId) ? `<img src="${imageUrlCache.get(im.sourceId)}" alt="" />` : ""}</div>
       <div class="image-card-body">
-        <div class="image-card-name">${escapeHtml(src ? src.name : "Image introuvable")}</div>
+        <div class="image-card-name"><span class="name-text">${escapeHtml(src ? src.name : "Image introuvable")}</span>${src && src.generated ? `<span class="gen-badge">IA</span>` : ""}</div>
         <select class="canon-category" data-imagestatus="${im.id}" ${locked ? "disabled" : ""}>
           <option value="proposé" ${im.status === "proposé" ? "selected" : ""}>Proposé</option>
           <option value="à corriger" ${im.status === "à corriger" ? "selected" : ""}>À corriger</option>
@@ -1215,7 +1294,7 @@ function renderSourceRow(s, project) {
     <div class="source-row">
       ${thumb}
       <div class="src-meta">
-        <div class="src-name">${escapeHtml(s.name)} ${s.dup ? '<span class="dup-badge">doublon</span>' : ""}</div>
+        <div class="src-name"><span class="name-text">${escapeHtml(s.name)}</span>${s.dup ? '<span class="dup-badge">doublon</span>' : ""}${s.generated ? '<span class="gen-badge">IA</span>' : ""}</div>
         <div class="src-sub">${fmtBytes(s.size)}${s.demo ? " · exemple" : ""}</div>
       </div>
       <select class="role-select" data-role="${s.id}" ${project.sourcesLocked ? "disabled" : ""}>
@@ -1922,6 +2001,42 @@ function bindImagesStep(project) {
       if (sh.selectedImageId === imId) sh.selectedImageId = null;
       touch(project); persist(); render();
     }
+  }));
+  document.querySelectorAll("[data-genprompt]").forEach((el) => el.addEventListener("change", () => {
+    const sh = findShot(el.dataset.genprompt);
+    if (sh) { sh.genPrompt = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-genimage]").forEach((btn) => btn.addEventListener("click", async () => {
+    const shotId = btn.dataset.genimage;
+    const sh = findShot(shotId);
+    if (!sh || genBusy.has(shotId)) return;
+    const promptEl = document.querySelector(`[data-genprompt="${shotId}"]`);
+    const prompt = (promptEl && promptEl.value.trim()) || buildImagePrompt(sh, project);
+    if (!prompt) { toast("Rien à générer — précise une action, un décor ou un prompt pour ce plan."); return; }
+    genBusy.add(shotId);
+    btn.disabled = true;
+    btn.textContent = "Génération en cours…";
+    try {
+      const { blob, cost } = await runImageGeneration(prompt, buildNegativePrompt(sh, project));
+      const srcId = uid();
+      project.sources.push({
+        id: srcId, name: `généré_${shotId.slice(0, 6)}_${Date.now().toString(36).slice(-4)}.png`,
+        size: blob.size, mime: blob.type || "image/png", category: "image", role: "Livrable",
+        addedAt: Date.now(), generated: true,
+      });
+      await AiXelDB.putBlob(srcId, blob);
+      sh.images.push(defaultShotImage(srcId));
+      project.generations.push({ id: uid(), shotId, provider: GEN_PROVIDER.id, model: GEN_PROVIDER.label, prompt, cost, status: "réussi", createdAt: Date.now(), sourceId: srcId });
+      touch(project); persist();
+      toast("Image générée — ajoutée aux candidats de ce plan.");
+    } catch (err) {
+      console.error(err);
+      project.generations.push({ id: uid(), shotId, provider: GEN_PROVIDER.id, model: GEN_PROVIDER.label, prompt, cost: 0, status: "échoué", error: err.message, createdAt: Date.now() });
+      touch(project); persist();
+      toast(err.message || "Échec de la génération.");
+    }
+    genBusy.delete(shotId);
+    render();
   }));
   document.getElementById("lockImages")?.addEventListener("click", () => {
     if (!project.storyboard.shots.some((s) => s.selectedImageId)) return;
