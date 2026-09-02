@@ -42,17 +42,20 @@ function requireToken() {
 // déployé. Un `<video>`/`<img>` peut charger cette URL sans CORS, mais pas `fetch()`, qui est ce
 // dont on a besoin pour récupérer les octets et les stocker dans IndexedDB. On rapatrie donc la
 // vidéo en base64 CÔTÉ SERVEUR (même principe que le connecteur image, §V3, où ça fonctionne de
-// façon fiable depuis le début) plutôt que de renvoyer l'URL nue au client. Une vidéo 480p de
-// ~5s tient largement sous la limite de réponse synchrone des fonctions Netlify (~6 Mo) ; par
-// sécurité, on refuse proprement plutôt que de risquer une réponse tronquée si jamais ça ne tenait
-// pas (garde-fou à 4,5 Mo en base64, même seuil que côté image d'entrée dans app.js).
+// façon fiable depuis le début) plutôt que de renvoyer l'URL nue au client. Testé en direct le
+// 2026-09-02 : une vidéo 480p de ~5s pèse en réalité un peu plus que prévu une fois encodée en
+// base64 (le premier seuil de sécurité à 4,5 Mo — copié du seuil côté image d'entrée, bien plus
+// légère — s'est révélé trop bas et a rejeté une vidéo par ailleurs valide). Relevé à 5,5 Mo, en
+// gardant une marge sous la limite de réponse synchrone des fonctions Netlify (~6 Mo, JSON+en-têtes
+// inclus) plutôt que de risquer une réponse tronquée.
 async function fetchVideoAsBase64(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
   const buf = Buffer.from(await res.arrayBuffer());
   const base64 = buf.toString("base64");
-  if (base64.length > 4.5 * 1024 * 1024) {
-    throw new Error("La vidéo générée est trop volumineuse pour être rapatriée automatiquement (cas rare) — réessaie, ou signale-le si ça se reproduit.");
+  if (base64.length > 5.5 * 1024 * 1024) {
+    const mb = (buf.length / (1024 * 1024)).toFixed(1);
+    throw new Error(`La vidéo générée (${mb} Mo) est trop volumineuse pour être rapatriée automatiquement — réessaie, ou signale-le si ça se reproduit souvent.`);
   }
   const mime = res.headers.get("content-type") || "video/mp4";
   return { videoBase64: base64, mime };
