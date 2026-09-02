@@ -1057,8 +1057,8 @@ function renderStoryboardStep(project) {
       ${!locked ? `
       <div class="card bulk-card">
         <h2>Coller en masse <span style="font-weight:400;color:var(--faint);font-size:11px">— remplit les plans dans l'ordre à partir d'un texte structuré</span></h2>
-        <p class="page-sub" style="margin:4px 0 10px">Un bloc par plan, dans l'ordre chronologique, avec des lignes "Action :", "Décor :", "Caméra :", "Émotion :" (accents ou pas, tirets ou pas — peu importe). Les titres de section et autre texte autour sont ignorés automatiquement.</p>
-        <textarea id="bulkShotsInput" class="brief-textarea" rows="6" placeholder="Action : ...&#10;Décor : ...&#10;Caméra : ...&#10;Émotion : ...&#10;&#10;Action : ...&#10;..."></textarea>
+        <p class="page-sub" style="margin:4px 0 10px">Un bloc par plan, dans l'ordre chronologique, avec des lignes "Action :", "Décor :", "Caméra :", "Émotion :" (accents ou pas, tirets ou pas — peu importe). Les titres de section et autre texte autour sont ignorés automatiquement. Colle le texte directement (Cmd+V), ou dépose un fichier .md/.txt sur la zone.</p>
+        <textarea id="bulkShotsInput" class="brief-textarea" rows="6" placeholder="Action : ...&#10;Décor : ...&#10;Caméra : ...&#10;Émotion : ...&#10;&#10;Action : ...&#10;...&#10;&#10;(ou dépose ici un fichier .md/.txt)"></textarea>
         <button class="btn primary" id="bulkShotsApply" style="margin-top:10px">Importer dans les plans →</button>
       </div>
       ` : ""}
@@ -2037,6 +2037,26 @@ function bindStoryboardStep(project) {
     touch(project); persist(); render();
     toast("Plans régénérés.");
   });
+  const bulkInput = document.getElementById("bulkShotsInput");
+  if (bulkInput) {
+    bulkInput.addEventListener("dragover", (e) => { e.preventDefault(); bulkInput.classList.add("drag-over"); });
+    bulkInput.addEventListener("dragleave", () => { bulkInput.classList.remove("drag-over"); });
+    bulkInput.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      bulkInput.classList.remove("drag-over");
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      const looksTexty = /\.(md|markdown|txt)$/i.test(file.name) || (file.type && file.type.startsWith("text/")) || !file.type;
+      if (!looksTexty) { toast("Dépose un fichier texte (.md ou .txt)."); return; }
+      try {
+        const text = await file.text();
+        bulkInput.value = text;
+        toast(`« ${file.name} » chargé — clique sur "Importer dans les plans →".`);
+      } catch {
+        toast("Impossible de lire ce fichier.");
+      }
+    });
+  }
   document.getElementById("bulkShotsApply")?.addEventListener("click", () => {
     const ta = document.getElementById("bulkShotsInput");
     const blocks = ta ? parseBulkShotBlocks(ta.value) : [];
