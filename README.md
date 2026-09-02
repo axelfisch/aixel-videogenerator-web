@@ -199,7 +199,8 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
   `generate-video-status.js`, connecteur isolé dans `_replicate-video.js`) réutilisent le même
   `REPLICATE_API_TOKEN` que les images tests — aucune variable d'environnement supplémentaire à
   ajouter sur Netlify. La génération vidéo est nettement plus lente qu'une image (souvent 30s à
-  2min) : le client patiente jusqu'à 25s côté serveur puis interroge le statut toutes les ~3s.
+  2min) : le client patiente 8s côté serveur (voir correctif "a pris trop de temps" ci-dessous —
+  historiquement 25s, réduit depuis) puis interroge le statut toutes les ~3s.
 - **Dans Production** : chaque plan dont une image test est choisie a un panneau de génération
   avec un prompt pré-rempli (repris du prompt qui a servi à l'image choisie — le meilleur reflet
   de ce que montre le plan — avec repli sur action/décor/caméra si l'image a été importée plutôt
@@ -233,17 +234,38 @@ navigateur, plutôt que de deviner à partir de relais copier-coller) :
    hébergé par un fournisseur d'inférence différent (Pruna AI). A immédiatement fonctionné : la
    prédiction tourne réellement (~28s, cohérent avec le temps annoncé par le fournisseur).
 3. **CORS sur l'URL de livraison** — une fois la vidéo générée, le téléchargement client
-   (`fetch(videoUrl)`, ajouté lors du correctif de taille de payload plus tôt le même jour) échouait
-   silencieusement ("Failed to fetch") : `replicate.delivery` n'envoie pas d'en-têtes CORS
-   permissifs pour `fetch()` (contrairement à un `<video src>`, qui charge sans CORS). Corrigé en
-   revenant au rapatriement en base64 côté serveur — même principe fiable que le connecteur image
-   (§V3) — avec un garde-fou de taille (5,5 Mo en base64, sous la limite de réponse synchrone
-   Netlify ~6 Mo ; le premier seuil à 4,5 Mo, copié du budget d'image d'entrée bien plus légère,
-   s'est révélé trop bas pour une vraie vidéo et a été relevé après un premier refus en direct).
+   (`fetch(videoUrl)`) échouait silencieusement ("Failed to fetch") : `replicate.delivery` n'envoie
+   pas d'en-têtes CORS permissifs pour `fetch()` (contrairement à un `<video src>`, qui charge sans
+   CORS). Une première tentative rapatriait la vidéo en base64 côté serveur (même principe que le
+   connecteur image, §V3), mais s'est heurtée à la limite de réponse synchrone des fonctions Netlify
+   (~6 Mo) dès qu'une vidéo réelle dépassait le seuil — pas un cas rare, une vraie génération l'a
+   déclenché en production. **Solution définitive** : réécriture proxy dans `netlify.toml`
+   (`/video-proxy/* → https://replicate.delivery/:splat`, `status = 200`) — le CDN Netlify relaie
+   lui-même les octets sous l'origine du site (donc pas de CORS), sans jamais passer par une
+   fonction Lambda (donc pas de plafond de 6 Mo). `_replicate-video.js` se contente de transformer
+   l'URL Replicate en chemin relatif vers ce proxy.
 
-Génération de bout en bout vérifiée en direct : prédiction réussie, vidéo rapatriée en base64,
-signature MP4 valide (`ftypisom`), ~3,8 Mo, $0,40 facturés. Le connecteur est désormais isolé dans
-`_replicate-video.js` — un futur changement de fournisseur ne devrait toucher que ce fichier.
+Génération de bout en bout vérifiée en direct : prédiction réussie, vidéo servie via
+`/video-proxy/...`, signature MP4 valide (`ftypisom`), $0,40 facturés. Le connecteur est désormais
+isolé dans `_replicate-video.js` — un futur changement de fournisseur ne devrait toucher que ce
+fichier.
+
+## Correctif (2026-09-02) — erreur "a pris trop de temps" à chaque génération vidéo (ou presque)
+
+Après le correctif ci-dessus, Axel a signalé un nouvel échec, différent : "échoué, a pris trop de
+temps." Diagnostiqué en direct (deux appels réels à `generate-video` depuis le site déployé,
+minutés) : la fonction utilisait `Prefer: wait=25` (attendre jusqu'à 25s une réponse synchrone de
+Replicate). En réalité, Replicate a mis ~30 à 30,3s à répondre dans les deux tests — au-delà des
+25s demandés, et surtout au-delà du plafond **dur et non configurable d'environ 29s** de l'AWS API
+Gateway qui sert de façade aux fonctions Netlify classiques (Lambda). Résultat observé : deux appels
+quasi identiques, l'un a réussi de justesse (200, "processing"), l'autre a été tué par la
+plateforme (504, page d'erreur HTML au lieu de JSON) — un vrai pile-ou-face à chaque génération, pas
+un cas rare. Comme la génération réelle prend de toute façon ~30-35s au total (jamais moins de 25s
+observés), attendre aussi longtemps côté serveur n'apportait aucun bénéfice réel — seulement le
+risque de heurter ce plafond. Corrigé en réduisant l'attente à `Prefer: wait=8` : la fonction revient
+presque toujours en "processing" (JSON propre, bien avant le plafond de 29s), et le sondage déjà en
+place côté client (`app.js`, toutes les ~3s) prend le relais — vérifié en direct : une fois la vidéo
+prête, le sondage la récupère en moins d'une seconde.
 
 ## Prochaine étape
 
