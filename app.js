@@ -798,6 +798,12 @@ function renderAudioStep(project) {
       </div>
       ${!project.audioLocked ? `<p class="page-sub" style="margin:10px 0 0;font-size:11.5px">L'estimation de tempo est la partie la moins fiable de l'analyse — corrige-la si elle ne colle pas à ton oreille (métronome, tap tempo…), la carte musicale utilisera ta valeur.</p>` : ""}
     </div>
+    <div class="card replace-audio-card">
+      <h2>Remplacer le fichier audio</h2>
+      <p class="page-sub" style="margin-top:-6px">Pour utiliser une autre version du même morceau (autre export, durée légèrement différente…) sans perdre ton travail. <b>Les sections et les plans du storyboard déjà écrits ne sont jamais touchés</b> — seules la référence audio et ses métriques (durée, BPM, forme d'onde) sont mises à jour.</p>
+      <input type="file" id="replaceAudioInput" accept="audio/*" hidden />
+      <button class="btn ghost" id="replaceAudioBtn">📀 Choisir un autre fichier audio →</button>
+    </div>
     ${!project.audioLocked ? `
       <div class="card decision-card">
         <div class="decision-icon">✦</div>
@@ -1910,6 +1916,54 @@ function bindAudioStep(project) {
     const next = project.steps.find((s) => s.id === "carte"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
+  document.getElementById("replaceAudioBtn")?.addEventListener("click", () => {
+    document.getElementById("replaceAudioInput")?.click();
+  });
+  document.getElementById("replaceAudioInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    await replaceAudioFile(project, file);
+  });
+}
+
+async function replaceAudioFile(project, file) {
+  const audioSrc = project.sources.find((s) => s.category === "audio");
+  if (!audioSrc) { toast("Aucune source audio à remplacer — passe par l'étape Sources."); return; }
+  const looksAudio = (file.type && file.type.startsWith("audio/")) || /\.(mp3|wav|m4a|aac|flac|ogg|aiff?)$/i.test(file.name);
+  if (!looksAudio) { toast("Ce fichier ne ressemble pas à un fichier audio."); return; }
+  toast("Remplacement en cours…");
+  try {
+    await AiXelDB.putBlob(audioSrc.id, file);
+    audioSrc.name = file.name;
+    audioSrc.size = file.size;
+    audioSrc.mime = file.type || audioSrc.mime;
+    audioSrc.addedAt = Date.now();
+    // La lecture audio (étapes Carte musicale / Animatique) met en cache un <audio>
+    // par sourceId : on l'invalide pour forcer un rechargement du nouveau fichier.
+    if (audioEl) { audioEl.pause(); audioEl.remove(); audioEl = null; audioElKey = null; }
+    const result = await AiXelAudio.analyze(file);
+    const prevBpmManual = project.audio && project.audio.bpmManual;
+    const prevBpm = project.audio && project.audio.bpm;
+    project.audio = {
+      sourceId: audioSrc.id,
+      file: audioSrc.name,
+      duration: result.duration,
+      bpm: prevBpmManual ? prevBpm : result.bpm,
+      peak: result.peak,
+      profile: profileFromEnergy(result.averageEnergy),
+      waveform: result.waveform,
+      bpmManual: !!prevBpmManual,
+    };
+    // Volontairement inchangés : project.structure et project.storyboard.shots —
+    // ton découpage en sections et tes plans (actions/décors/caméra/images choisies)
+    // restent exactement comme tu les as laissés.
+    touch(project); persist(); render();
+    toast(`Audio remplacé — nouvelle durée ${fmtTime(result.duration)}. Sections et plans conservés.`);
+  } catch (err) {
+    console.error(err);
+    toast(err.message || "Échec du remplacement audio.");
+  }
 }
 
 function bindBriefStep(project) {
