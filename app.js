@@ -594,11 +594,17 @@ function renderAudioStep(project) {
       <button class="btn small reopen" id="reopenAudio">Rouvrir</button></div>` : ""}
     <div class="card">
       <div class="metric-row">
-        <div class="metric"><b>${Math.round(a.bpm)}</b><small>BPM estimé</small></div>
+        <div class="metric bpm-metric">
+          ${project.audioLocked
+            ? `<b>${Math.round(a.bpm)}</b>`
+            : `<input type="number" id="bpmOverride" class="bpm-input" value="${Math.round(a.bpm)}" min="40" max="220" step="1" />`}
+          <small>${a.bpmManual ? "BPM (corrigé)" : "BPM estimé"}</small>
+        </div>
         <div class="metric"><b>${fmtTime(a.duration)}</b><small>durée</small></div>
         <div class="metric"><b>${(a.peak * 100).toFixed(0)}%</b><small>crête</small></div>
         <div class="metric"><b style="font-size:14px">${a.profile}</b><small>profil dominant</small></div>
       </div>
+      ${!project.audioLocked ? `<p class="page-sub" style="margin:10px 0 0;font-size:11.5px">L'estimation de tempo est la partie la moins fiable de l'analyse — corrige-la si elle ne colle pas à ton oreille (métronome, tap tempo…), la carte musicale utilisera ta valeur.</p>` : ""}
     </div>
     ${!project.audioLocked ? `
       <div class="card decision-card">
@@ -1027,7 +1033,7 @@ function renderCarteMusicale(project) {
         ${wave.map((h) => `<i style="height:${Math.max(8, Math.round(h * 100))}%"></i>`).join("")}
       </div>
       <div class="metric-row">
-        <div class="metric"><b>${Math.round(project.audio.bpm)}</b><small>BPM estimé</small></div>
+        <div class="metric"><b>${Math.round(project.audio.bpm)}</b><small>${project.audio.bpmManual ? "BPM (corrigé)" : "BPM estimé"}</small></div>
         <div class="metric"><b>${fmtTime(project.audio.duration)}</b><small>durée</small></div>
         <div class="metric"><b>${isDemo ? "+" + project.audio.peak.toFixed(1) + " dB" : (project.audio.peak * 100).toFixed(0) + "%"}</b><small>crête</small></div>
         <div class="metric"><b style="font-size:14px">${project.audio.profile}</b><small>profil dominant</small></div>
@@ -1330,6 +1336,7 @@ function bindAudioStep(project) {
         peak: result.peak,
         profile: profileFromEnergy(result.averageEnergy),
         waveform: result.waveform,
+        bpmManual: false,
       };
       project.structure = result.sections;
       touch(project); persist(); render();
@@ -1340,6 +1347,14 @@ function bindAudioStep(project) {
       analyzeBtn.disabled = false;
       analyzeBtn.textContent = "Lancer l'analyse locale →";
     }
+  });
+  document.getElementById("bpmOverride")?.addEventListener("change", (e) => {
+    const v = parseFloat(e.target.value);
+    if (!Number.isFinite(v) || v <= 0) return;
+    project.audio.bpm = v;
+    project.audio.bpmManual = true;
+    touch(project); persist(); render();
+    toast("BPM corrigé manuellement.");
   });
   document.getElementById("lockAudio")?.addEventListener("click", () => {
     project.audioLocked = true;

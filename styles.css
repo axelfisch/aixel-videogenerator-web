@@ -255,3 +255,7 @@ a{color:inherit}
 .shot-row textarea{width:100%;background:var(--panel);border:1px solid var(--stroke);border-radius:9px;padding:9px 10px;color:var(--text);font-size:12px;resize:vertical}
 .shot-row textarea:focus{outline:none;border-color:var(--cyan)}
 .shot-row select[multiple]{background:var(--panel);border:1px solid var(--stroke);border-radius:9px;padding:6px;color:var(--text);font-size:12px;width:100%}
+
+/* ---------- BPM corrigeable (étape Audio) ---------- */
+.bpm-input{background:none;border:0;border-bottom:1px dashed var(--stroke-2);color:var(--text);font:19px "IBM Plex Mono";font-weight:700;width:100%;padding:0 0 2px}
+.bpm-input:focus{outline:none;border-color:var(--cyan)}
