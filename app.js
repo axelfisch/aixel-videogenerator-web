@@ -297,6 +297,34 @@ function proposeShots(project) {
   return shots;
 }
 
+// Import en masse (Storyboard) — reconnaît des lignes "Action :", "Décor :", "Caméra :", "Émotion :"
+// (accents/majuscules/tirets tolérés), regroupe en blocs (un nouveau bloc démarre à chaque "Action :"),
+// ignore tout le reste (titres de section, timecodes, texte libre). Un bloc = un plan, dans l'ordre.
+function parseBulkShotBlocks(text) {
+  const re = /^\s*(?:[-*•]\s*)?\*{0,2}(action|d[ÉéEe]cor|cam[ÉéEe]ra|[ÉéEe]motion)\*{0,2}\s*:\s*(.+?)\s*\**\s*$/i;
+  const keyMap = { action: "action", decor: "decor", camera: "camera", emotion: "emotion" };
+  const normalizeKey = (raw) => {
+    const k = raw.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); // decor/camera/emotion normalises
+    return keyMap[k] || k;
+  };
+  const blocks = [];
+  let current = null;
+  text.split(/\r?\n/).forEach((line) => {
+    const m = line.match(re);
+    if (!m) return;
+    const key = normalizeKey(m[1]);
+    const value = m[2].trim();
+    if (key === "action") {
+      if (current) blocks.push(current);
+      current = {};
+    }
+    if (!current) current = {};
+    current[key] = value;
+  });
+  if (current) blocks.push(current);
+  return blocks;
+}
+
 function groupShotsBySection(project) {
   const bySection = new Map();
   project.storyboard.shots.forEach((sh) => {
@@ -1026,6 +1054,14 @@ function renderStoryboardStep(project) {
       </div>
     ` : `
       ${!locked ? `<button class="btn ghost" id="regenShots" style="margin-bottom:14px">↺ Régénérer les plans</button>` : ""}
+      ${!locked ? `
+      <div class="card bulk-card">
+        <h2>Coller en masse <span style="font-weight:400;color:var(--faint);font-size:11px">— remplit les plans dans l'ordre à partir d'un texte structuré</span></h2>
+        <p class="page-sub" style="margin:4px 0 10px">Un bloc par plan, dans l'ordre chronologique, avec des lignes "Action :", "Décor :", "Caméra :", "Émotion :" (accents ou pas, tirets ou pas — peu importe). Les titres de section et autre texte autour sont ignorés automatiquement.</p>
+        <textarea id="bulkShotsInput" class="brief-textarea" rows="6" placeholder="Action : ...&#10;Décor : ...&#10;Caméra : ...&#10;Émotion : ...&#10;&#10;Action : ...&#10;..."></textarea>
+        <button class="btn primary" id="bulkShotsApply" style="margin-top:10px">Importer dans les plans →</button>
+      </div>
+      ` : ""}
       ${groupShotsBySection(project).map(([, shots]) => `
         <div class="card">
           <div class="section-head"><h2>${escapeHtml(shots[0].sectionLabel)}</h2><span class="count">${shots.length} plan${shots.length > 1 ? "s" : ""}</span></div>
@@ -2000,6 +2036,21 @@ function bindStoryboardStep(project) {
     sb.shots = proposeShots(project);
     touch(project); persist(); render();
     toast("Plans régénérés.");
+  });
+  document.getElementById("bulkShotsApply")?.addEventListener("click", () => {
+    const ta = document.getElementById("bulkShotsInput");
+    const blocks = ta ? parseBulkShotBlocks(ta.value) : [];
+    if (!blocks.length) { toast("Aucun plan reconnu — vérifie le format (Action :/Décor :/Caméra :/Émotion :)."); return; }
+    const n = Math.min(blocks.length, sb.shots.length);
+    for (let i = 0; i < n; i++) {
+      const b = blocks[i], s = sb.shots[i];
+      if (b.action != null) s.action = b.action;
+      if (b.decor != null) s.decor = b.decor;
+      if (b.camera != null) s.camera = b.camera;
+      if (b.emotion != null) s.emotion = b.emotion;
+    }
+    touch(project); persist(); render();
+    toast(blocks.length === sb.shots.length ? `${n} plans importés.` : `${n} plan${n > 1 ? "s" : ""} importé${n > 1 ? "s" : ""} sur ${sb.shots.length} (texte collé = ${blocks.length} bloc${blocks.length > 1 ? "s" : ""}).`);
   });
   const findShot = (id) => sb.shots.find((s) => s.id === id);
   document.querySelectorAll("[data-shotdir]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotdir); if (s) { s.direction = el.value; touch(project); persist(); } }));
