@@ -36,18 +36,34 @@ function requireToken() {
   return token;
 }
 
-// Le résultat d'une prédiction réussie est une URL Replicate temporaire. Contrairement au
-// connecteur image (V3), on NE rapatrie PAS la vidéo en base64 côté serveur : les fonctions
-// Netlify (AWS Lambda dessous) refusent toute réponse synchrone au-delà de ~6 Mo, et une vidéo
-// (même courte, même en 480p) dépasse vite cette limite une fois encodée en base64 (+33%). On
-// renvoie donc directement l'URL Replicate : le client la télécharge lui-même pour la stocker
-// localement (IndexedDB). Cette URL est temporaire et sans donnée sensible (contrairement au
-// jeton API, qui lui ne quitte jamais ce fichier).
-function normalizeSucceeded(prediction) {
+// Correctif du 2026-09-02 : l'URL Replicate renvoyée par une prédiction réussie n'envoie PAS
+// d'en-têtes CORS permissifs — un `fetch()` direct depuis le navigateur échoue silencieusement
+// ("Failed to fetch", aucun détail exploitable), confirmé en le testant en direct depuis le site
+// déployé. Un `<video>`/`<img>` peut charger cette URL sans CORS, mais pas `fetch()`, qui est ce
+// dont on a besoin pour récupérer les octets et les stocker dans IndexedDB. On rapatrie donc la
+// vidéo en base64 CÔTÉ SERVEUR (même principe que le connecteur image, §V3, où ça fonctionne de
+// façon fiable depuis le début) plutôt que de renvoyer l'URL nue au client. Une vidéo 480p de
+// ~5s tient largement sous la limite de réponse synchrone des fonctions Netlify (~6 Mo) ; par
+// sécurité, on refuse proprement plutôt que de risquer une réponse tronquée si jamais ça ne tenait
+// pas (garde-fou à 4,5 Mo en base64, même seuil que côté image d'entrée dans app.js).
+async function fetchVideoAsBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
+  const buf = Buffer.from(await res.arrayBuffer());
+  const base64 = buf.toString("base64");
+  if (base64.length > 4.5 * 1024 * 1024) {
+    throw new Error("La vidéo générée est trop volumineuse pour être rapatriée automatiquement (cas rare) — réessaie, ou signale-le si ça se reproduit.");
+  }
+  const mime = res.headers.get("content-type") || "video/mp4";
+  return { videoBase64: base64, mime };
+}
+
+async function normalizeSucceeded(prediction) {
   const output = prediction.output;
   const url = Array.isArray(output) ? output[0] : output;
   if (!url) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
-  return { status: "succeeded", videoUrl: url, cost: FIXED_COST_USD_480P, id: prediction.id };
+  const { videoBase64, mime } = await fetchVideoAsBase64(url);
+  return { status: "succeeded", videoBase64, mime, cost: FIXED_COST_USD_480P, id: prediction.id };
 }
 
 function normalizePending(prediction) {
@@ -58,4 +74,4 @@ function normalizeFailed(prediction) {
   return { status: "failed", error: (prediction && prediction.error) || "Génération vidéo échouée côté fournisseur." };
 }
 
-module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD_480P, requireToken, normalizeSucceeded, normalizePending, normalizeFailed };
+module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD_480P, requireToken, fetchVideoAsBase64, normalizeSucceeded, normalizePending, normalizeFailed };

@@ -220,9 +220,11 @@ async function resizeImageForVideoGen(blob, maxDim = 960, quality = 0.85) {
 }
 // Anime l'image test choisie du plan (image→vidéo) via le proxy Netlify. La génération vidéo est
 // nettement plus lente qu'une image (souvent 30s-2min) : on attend une réponse rapide côté
-// serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal. Le résultat revient
-// comme une URL Replicate (pas en base64, même limite de taille côté réponse) — le client la
-// télécharge lui-même directement pour la stocker localement.
+// serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal.
+// Correctif du 2026-09-02 : l'URL Replicate de la vidéo générée n'a pas d'en-têtes CORS permissifs
+// — un fetch() direct depuis le navigateur échoue ("Failed to fetch", confirmé en le testant en
+// direct). Le serveur rapatrie donc la vidéo en base64 lui-même (comme pour les images, §V3) et
+// c'est ce résultat déjà prêt que le client stocke localement, sans jamais toucher l'URL Replicate.
 async function runVideoGeneration(prompt, imageBlob) {
   const resized = await resizeImageForVideoGen(imageBlob);
   const imageDataUrl = await blobToDataUrl(resized);
@@ -245,10 +247,8 @@ async function runVideoGeneration(prompt, imageBlob) {
     attempts++;
   }
   if (data.status !== "succeeded") throw new Error(data.error || "La génération vidéo a échoué ou a pris trop de temps.");
-  if (!data.videoUrl) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
-  const videoRes = await fetch(data.videoUrl);
-  if (!videoRes.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
-  const blob = await videoRes.blob();
+  if (!data.videoBase64) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
+  const blob = await (await fetch(`data:${data.mime || "video/mp4"};base64,${data.videoBase64}`)).blob();
   return { blob, cost: data.cost != null ? data.cost : videoCostFor() };
 }
 
