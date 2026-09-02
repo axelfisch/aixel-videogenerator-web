@@ -173,21 +173,50 @@ premier connecteur éprouvé.
   (`aixel-videogenerator`), puis redéployer. Sans cette clé, le bouton reste utilisable mais échoue
   proprement avec un message clair plutôt qu'une erreur muette.
 
-## Prochaine étape (V3.5 — Production par plans : génération vidéo)
+## V3.5 — Production par plans : génération vidéo (fait)
 
-Génération vidéo réelle pour l'étape Production, strictement limitée aux plans dont l'image test
-est déjà approuvée — jamais en masse. Comparaison des variantes, reprise ciblée en cas d'échec,
-coûts réels journalisés.
+Génération vidéo réelle pour l'étape Production, strictement limitée aux plans dont une image test
+est déjà choisie (jamais en masse, §8.10) — un plan à la fois, sur l'image déjà validée par Axel.
+Comparaison des variantes (plusieurs vidéos candidates par plan, comme les images tests), reprise
+ciblée en cas d'échec, coûts réels journalisés dans `project.videoGenerations` (séparé du journal
+des images tests pour ne jamais mélanger les deux totaux dépensés).
 
-Fournisseur envisagé : [TokenRouter](https://www.tokenrouter.com) (compte déjà existant chez Axel)
-plutôt que Replicate — décision prise le 2026-09-02. Pour les images tests, Replicate/FLUX.1
-[schnell] reste le bon choix (≈$0,003/image, pensé pour itérer beaucoup et pas cher). Pour la
-Production, moins de générations mais un enjeu de qualité plus élevé (ce sont les plans qui
-partent dans le montage final) : le catalogue premium de TokenRouter (ByteDance Seedream,
-Microsoft MAI-Image, OpenAI gpt-5.4-image, et ses modèles vidéo) devient pertinent malgré un coût
-par génération plus élevé, avec l'avantage d'un compte/une clé unique déjà en place pour plusieurs
-projets AiXel. À vérifier au moment venu : catalogue de modèles vidéo réellement disponibles côté
-TokenRouter et leur tarif.
+- **Fournisseur : Replicate plutôt que TokenRouter**, revenant sur la décision provisoire du
+  2026-09-02. TokenRouter reste un compte existant chez Axel et liste bien des modèles vidéo
+  (Kling, MiniMax/Hailuo, Wan, HappyHorse), mais son contrat d'API vidéo (endpoint, schéma de
+  requête, pagination des résultats) n'est documenté nulle part publiquement — l'intégrer à
+  l'aveugle sur un connecteur payant réel n'était pas raisonnable. Replicate héberge les mêmes
+  familles de modèles vidéo avec une API prédictions déjà éprouvée dans ce dépôt (§V3) et le jeton
+  `REPLICATE_API_TOKEN` déjà configuré chez Axel — aucune nouvelle mise en place. À reconsidérer si
+  Axel confirme un jour le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
+- **Modèle** : `wavespeedai/wan-2.1-i2v-480p` (image→vidéo, 480p, jusqu'à ~100 images à 16 im/s
+  soit ~6,25s) — ≈$0,09/seconde de sortie au tarif Replicate de 2026-09 (à réviser si le
+  fournisseur change ses prix). Un plan plus long que ~6,25s est honnêtement plafonné avec un
+  avertissement affiché avant de générer, plutôt que silencieusement tronqué sans prévenir.
+- **Deux fonctions serveur** (`netlify/functions/generate-video.js` et
+  `generate-video-status.js`, connecteur isolé dans `_replicate-video.js`) réutilisent le même
+  `REPLICATE_API_TOKEN` que les images tests — aucune variable d'environnement supplémentaire à
+  ajouter sur Netlify. La génération vidéo est nettement plus lente qu'une image (souvent 30s à
+  2min) : le client patiente jusqu'à 25s côté serveur puis interroge le statut toutes les ~3s.
+- **Dans Production** : chaque plan dont une image test est choisie a un panneau de génération
+  avec un prompt pré-rempli (repris du prompt qui a servi à l'image choisie — le meilleur reflet
+  de ce que montre le plan — avec repli sur action/décor/caméra si l'image a été importée plutôt
+  que générée), le coût affiché *avant* de cliquer, et un bouton "Générer la vidéo". Le résultat
+  est rapatrié et stocké localement (IndexedDB) puis ajouté comme candidat vidéo du plan — badge
+  "IA". Une vidéo choisie par plan devient la référence pour le montage à venir. Les plans sans
+  image test choisie restent visibles mais hors production, avec un rappel explicite de retourner
+  à Images tests plutôt que générer sans validation préalable.
+- **Testé en Playwright** (connecteur réseau simulé) : chemin d'attente-puis-sondage jusqu'au
+  succès, chemin d'erreur immédiate du fournisseur (échec propre, coût à $0, rien ajouté), coût
+  calculé correctement à partir de la durée réelle du plan, prompt vidéo correctement repris du
+  prompt de l'image choisie, journal vidéo jamais mélangé au journal des images, verrouillage et
+  persistance au rechargement — zéro erreur console.
+
+## Prochaine étape
+
+Montage/continuité et exports (§8.11+ du document d'architecture) — assembler les vidéos de plans
+choisies en une timeline continue avec la piste audio verrouillée, contrôle qualité final, export
+du fichier livrable. Pas commencé.
 
 ## Déployer
 

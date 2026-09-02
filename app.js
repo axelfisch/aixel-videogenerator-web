@@ -102,6 +102,10 @@ function defaultShotImage(sourceId) {
 }
 function defaultImagelab() { return { locked: false, lockedAt: null }; }
 function defaultAnimatic() { return { locked: false, lockedAt: null }; }
+function defaultProduction() { return { locked: false, lockedAt: null }; }
+function defaultShotVideo(sourceId) {
+  return { id: uid(), sourceId: sourceId || null, addedAt: Date.now(), status: "proposé", notes: "" };
+}
 
 // V3 (§8.10 Production Router) — premier connecteur de génération, réservé aux images tests
 // (moins cher, plus rapide à itérer que la vidéo — §13 "aucun rendu coûteux comme test
@@ -155,6 +159,70 @@ async function runImageGeneration(prompt, negativePrompt) {
   if (data.status !== "succeeded") throw new Error(data.error || "La génération a échoué ou a pris trop de temps.");
   const blob = await (await fetch(`data:${data.mime || "image/png"};base64,${data.imageBase64}`)).blob();
   return { blob, cost: data.cost != null ? data.cost : GEN_PROVIDER.costPerImage };
+}
+
+// V3.5 (§8.10 Production Router) — connecteur vidéo, réservé aux plans dont l'image test est déjà
+// choisie (jamais en masse, §8.10). Fournisseur : Replicate (modèle Wan 2.1 image→vidéo, 480p) —
+// et non TokenRouter comme envisagé initialement (2026-09-02) : le contrat d'API vidéo de
+// TokenRouter n'est pas documenté publiquement, alors que celui-ci l'est, réutilise le jeton
+// Replicate déjà configuré et déjà facturé chez Axel, sans nouvelle mise en place. À reconsidérer
+// si Axel confirme le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
+const VIDEO_GEN_PROVIDER = {
+  id: "replicate-wan2.1-i2v-480p",
+  label: "Replicate — Wan 2.1 (image→vidéo, 480p)",
+  costPerSecond: 0.09, // tarif Replicate au 2026-09 (à réviser si le fournisseur change ses prix)
+  fps: 16,
+  maxFrames: 100, // ≈ 6.25s à 16 im/s — plafond du modèle
+};
+function videoFramesFor(durSec) {
+  return Math.max(5, Math.min(VIDEO_GEN_PROVIDER.maxFrames, Math.round(durSec * VIDEO_GEN_PROVIDER.fps)));
+}
+function videoCostFor(durSec) {
+  const frames = videoFramesFor(durSec);
+  return (frames / VIDEO_GEN_PROVIDER.fps) * VIDEO_GEN_PROVIDER.costPerSecond;
+}
+// Réutilise le même prompt que l'image test choisie (déjà validé visuellement par Axel), sans
+// jamais rien inventer de plus — juste ce qu'il a déjà écrit ailleurs dans le projet. Priorité :
+// un prompt vidéo explicitement retouché > le prompt qui a servi à générer l'image choisie (le
+// meilleur reflet de ce que ce plan montre) > un prompt recomposé depuis action/décor/caméra si
+// l'image choisie a été importée plutôt que générée.
+function buildVideoPrompt(sh, project) {
+  if (sh.genVideoPrompt != null && sh.genVideoPrompt !== "") return sh.genVideoPrompt;
+  if (sh.genPrompt != null && sh.genPrompt !== "") return sh.genPrompt;
+  return buildImagePrompt(sh, project);
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Échec de lecture de l'image de référence."));
+    reader.readAsDataURL(blob);
+  });
+}
+// Anime l'image test choisie du plan (image→vidéo) via le proxy Netlify. La génération vidéo est
+// nettement plus lente qu'une image (souvent 30s-2min) : on attend une réponse rapide côté
+// serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal.
+async function runVideoGeneration(prompt, imageBlob, durSec) {
+  const imageDataUrl = await blobToDataUrl(imageBlob);
+  const frames = videoFramesFor(durSec);
+  const res = await fetch("/.netlify/functions/generate-video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, image: imageDataUrl, frames, fps: VIDEO_GEN_PROVIDER.fps }),
+  });
+  let data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Échec de la génération vidéo (connecteur indisponible).");
+  let attempts = 0;
+  while (data.status === "processing" && attempts < 90) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const poll = await fetch(`/.netlify/functions/generate-video-status?id=${encodeURIComponent(data.id)}&frames=${frames}`);
+    data = await poll.json().catch(() => ({}));
+    if (!poll.ok) throw new Error(data.error || "Échec du suivi de la génération vidéo.");
+    attempts++;
+  }
+  if (data.status !== "succeeded") throw new Error(data.error || "La génération vidéo a échoué ou a pris trop de temps.");
+  const blob = await (await fetch(`data:${data.mime || "video/mp4"};base64,${data.videoBase64}`)).blob();
+  return { blob, cost: data.cost != null ? data.cost : videoCostFor(durSec) };
 }
 
 // Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
@@ -291,6 +359,7 @@ function proposeShots(project) {
         references: [], prompt: "",
         status: "proposé",
         images: [], selectedImageId: null, genPrompt: null,
+        videos: [], selectedVideoId: null, genVideoPrompt: null,
       });
     }
   });
@@ -358,7 +427,9 @@ function newProjectRecord(name, artist) {
     storyboard: defaultStoryboard(),
     imagelab: defaultImagelab(),
     animatic: defaultAnimatic(),
+    production: defaultProduction(),
     generations: [],
+    videoGenerations: [],
     creditsAvoided: 0,
   };
 }
@@ -373,11 +444,16 @@ function migrateProject(p) {
   if (!p.storyboard) p.storyboard = defaultStoryboard();
   if (!p.imagelab) p.imagelab = defaultImagelab();
   if (!p.animatic) p.animatic = defaultAnimatic();
+  if (!p.production) p.production = defaultProduction();
   if (!p.generations) p.generations = [];
+  if (!p.videoGenerations) p.videoGenerations = [];
   (p.storyboard.shots || []).forEach((sh) => {
     if (!sh.images) sh.images = [];
     if (sh.selectedImageId === undefined) sh.selectedImageId = null;
     if (sh.genPrompt === undefined) sh.genPrompt = null;
+    if (!sh.videos) sh.videos = [];
+    if (sh.selectedVideoId === undefined) sh.selectedVideoId = null;
+    if (sh.genVideoPrompt === undefined) sh.genVideoPrompt = null;
   });
   return p;
 }
@@ -472,6 +548,7 @@ function defaultState() {
 
 let state = load();
 const imageUrlCache = new Map(); // sourceId -> object URL, pour éviter de relire IndexedDB à chaque rendu
+const videoUrlCache = new Map(); // sourceId -> object URL, pour les vidéos générées (Production)
 
 function load() {
   try {
@@ -528,6 +605,7 @@ function render() {
   `;
   bindCockpit(project);
   loadThumbnails(project);
+  loadVideoThumbnails(project);
 }
 
 // ---------- Bibliothèque de projets ----------
@@ -735,6 +813,7 @@ function renderMain(project, step) {
   if (step.id === "storyboard") return `<div class="crumb">${crumb}</div>` + renderStoryboardStep(project);
   if (step.id === "images") return `<div class="crumb">${crumb}</div>` + renderImagesStep(project);
   if (step.id === "animatique") return `<div class="crumb">${crumb}</div>` + renderAnimatiqueStep(project);
+  if (step.id === "production") return `<div class="crumb">${crumb}</div>` + renderProductionStep(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
@@ -1344,6 +1423,132 @@ function renderAnimatiqueStep(project) {
   `;
 }
 
+// ---------- Étape Production (V3.5, §8.10 — génération vidéo par plan) ----------
+// Strictement limitée aux plans dont une image test est déjà choisie (jamais en masse) — chaque
+// plan garde son propre panneau de génération, comme Images tests, avec le coût affiché avant
+// chaque clic et un journal honnête de chaque tentative (project.videoGenerations, séparé du
+// journal des images pour ne jamais mélanger les deux totaux dépensés).
+const videoGenBusy = new Set();
+
+function renderProductionStep(project) {
+  const shots = project.storyboard.shots;
+  const prod = project.production;
+  const locked = prod.locked;
+  const eligible = shots.filter((s) => s.selectedImageId);
+  const readyCount = eligible.filter((s) => s.selectedVideoId).length;
+  const okGens = project.videoGenerations.filter((g) => g.status === "réussi");
+  const genSpend = okGens.reduce((sum, g) => sum + (g.cost || 0), 0);
+
+  if (!shots.length) {
+    return `
+      <div class="page-head"><h1>Production</h1></div>
+      <p class="page-sub">Aucun plan pour l'instant.</p>
+      <div class="card empty-card"><div class="empty-hint">Génère le storyboard et choisis des images tests avant de produire les plans définitifs.</div></div>
+    `;
+  }
+  if (!eligible.length) {
+    return `
+      <div class="page-head"><h1>Production</h1></div>
+      <p class="page-sub">Aucun plan avec une image test choisie pour l'instant.</p>
+      <div class="card empty-card"><div class="empty-hint">Retourne à Images tests et choisis une image de référence pour au moins un plan — la Production ne génère jamais sans image déjà validée.</div></div>
+    `;
+  }
+
+  return `
+    <div class="page-head">
+      <h1>Production</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Production verrouillée" : `${readyCount}/${eligible.length} plan${eligible.length > 1 ? "s" : ""} avec une vidéo choisie`}</span>
+    </div>
+    <p class="page-sub">Génère la vidéo définitive de chaque plan approuvé — jamais en masse, un plan à la fois, sur l'image test déjà choisie. Fournisseur : ${VIDEO_GEN_PROVIDER.label}, ≈ $${VIDEO_GEN_PROVIDER.costPerSecond.toFixed(2)}/seconde de vidéo. Compare des variantes, relance ciblée en cas d'échec — les coûts réels sont journalisés séparément des images tests.</p>
+    ${okGens.length ? `<p class="gen-summary">🎬 ${okGens.length} vidéo${okGens.length > 1 ? "s" : ""} générée${okGens.length > 1 ? "s" : ""} ce projet · ≈ $${genSpend.toFixed(2)} dépensés</p>` : ""}
+    ${eligible.length < shots.length ? `<div class="dup-banner">ℹ️ ${shots.length - eligible.length} plan${shots.length - eligible.length > 1 ? "s n'ont" : " n'a"} pas encore d'image test choisie — ${shots.length - eligible.length > 1 ? "ils restent" : "il reste"} hors production tant que ce n'est pas fait dans Images tests.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Production verrouillée.
+      <button class="btn small reopen" id="reopenProduction">Rouvrir</button></div>` : ""}
+
+    ${groupShotsBySection({ ...project, storyboard: { ...project.storyboard, shots: eligible } }).map(([, sShots]) => `
+      <div class="card">
+        <div class="section-head"><h2>${escapeHtml(sShots[0].sectionLabel)}</h2><span class="count">${sShots.length} plan${sShots.length > 1 ? "s" : ""}</span></div>
+        <div class="shot-list">
+          ${sShots.map((sh, i) => renderProductionShotRow(sh, i, project, locked)).join("")}
+        </div>
+      </div>
+    `).join("")}
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller la production</h3>
+          <p>Les vidéos choisies deviennent la référence pour le montage.${readyCount === 0 ? " Choisis au moins une vidéo avant de verrouiller." : ""}</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockProduction" ${readyCount ? "" : "disabled"}>Verrouiller la production →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderProductionShotRow(sh, i, project, locked) {
+  const refImage = sh.images.find((im) => im.id === sh.selectedImageId);
+  const refSrc = refImage ? project.sources.find((s) => s.id === refImage.sourceId) : null;
+  return `
+    <div class="shot-row">
+      <div class="shot-top">
+        <span>0${i + 1}</span><span>${fmtTime(sh.start)} · ${sh.dur.toFixed(1)}s</span>
+        <span>${escapeHtml(sh.action || "(action à préciser)")}</span>
+      </div>
+      <div class="checklist-hint"><div><b>Image de référence :</b> ${escapeHtml(refSrc ? refSrc.name : "introuvable")}</div></div>
+      <div class="image-grid">
+        ${sh.videos.map((v) => renderVideoCandidate(v, sh, project, locked)).join("")}
+      </div>
+      ${!locked ? renderGenVideoPanel(sh, project, refImage) : ""}
+    </div>
+  `;
+}
+
+function renderGenVideoPanel(sh, project, refImage) {
+  const promptValue = buildVideoPrompt(sh, project);
+  const busy = videoGenBusy.has(sh.id);
+  const lastFailed = [...project.videoGenerations].reverse().find((g) => g.shotId === sh.id && g.status === "échoué");
+  const frames = videoFramesFor(sh.dur);
+  const outputSec = frames / VIDEO_GEN_PROVIDER.fps;
+  const clamped = outputSec < sh.dur - 0.05;
+  const cost = videoCostFor(sh.dur);
+  return `
+    <div class="gen-panel">
+      <label class="field"><span>Prompt envoyé à la génération (repris de l'image test choisie, modifiable)</span>
+        <textarea data-genvideoprompt="${sh.id}" rows="2" placeholder="Décris le mouvement/l'animation souhaitée…">${escapeHtml(promptValue)}</textarea>
+      </label>
+      ${clamped ? `<div class="gen-error" style="color:var(--text-dim)">⚠ Vidéo limitée à ${outputSec.toFixed(1)}s (plafond du modèle à ${VIDEO_GEN_PROVIDER.fps} im/s) — le plan dure ${sh.dur.toFixed(1)}s.</div>` : ""}
+      ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
+      <div class="gen-row">
+        <span class="gen-cost">≈ $${cost.toFixed(2)} / vidéo (${outputSec.toFixed(1)}s) · ${VIDEO_GEN_PROVIDER.label}</span>
+        <button class="btn small" data-genvideo="${sh.id}" ${busy || !refImage ? "disabled" : ""}>${busy ? "Génération en cours (peut prendre 1-2 min)…" : "🎬 Générer la vidéo"}</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderVideoCandidate(v, sh, project, locked) {
+  const src = project.sources.find((s) => s.id === v.sourceId);
+  const isSelected = sh.selectedVideoId === v.id;
+  const url = src ? (videoUrlCache.get(v.sourceId) || null) : null;
+  return `
+    <div class="image-card ${isSelected ? "selected" : ""}">
+      <div class="image-thumb video-thumb" data-videothumb="${v.sourceId}">${url ? `<video src="${url}" controls preload="metadata"></video>` : `<span class="empty-hint" style="font-size:11px">chargement…</span>`}</div>
+      <div class="image-card-body">
+        <div class="image-card-name"><span class="name-text">${escapeHtml(src ? src.name : "Vidéo introuvable")}</span><span class="gen-badge">IA</span></div>
+        ${!locked ? `
+          <div class="image-card-actions">
+            <button class="btn small ${isSelected ? "primary" : ""}" data-selectvideo="${sh.id}:${v.id}">${isSelected ? "✓ Choisie" : "Choisir"}</button>
+            <button class="src-del" data-delvideo="${sh.id}:${v.id}" aria-label="Retirer">✕</button>
+          </div>
+        ` : isSelected ? `<div class="image-card-actions"><span class="status-chip small">✓ Choisie</span></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 // ---------- Étape Sources et inventaire ----------
 
 function renderSourcesStep(project) {
@@ -1436,6 +1641,21 @@ async function loadThumbnails(project) {
   // on redessine la scène pour ne pas rester bloqué sur le repère neutre.
   if (loadedAny && project && project.activeStepId === "animatique" && project.audio) {
     updateAnimaticStage(project, audioEl && audioElKey === audioKeyFor(project) ? audioEl.currentTime : 0);
+  }
+}
+
+async function loadVideoThumbnails(project) {
+  const targets = document.querySelectorAll("[data-videothumb]");
+  for (const el of targets) {
+    const id = el.dataset.videothumb;
+    if (videoUrlCache.has(id)) { if (!el.querySelector("video")) el.innerHTML = `<video src="${videoUrlCache.get(id)}" controls preload="metadata"></video>`; continue; }
+    try {
+      const blob = await AiXelDB.getBlob(id);
+      if (!blob) continue;
+      const url = URL.createObjectURL(blob);
+      videoUrlCache.set(id, url);
+      el.innerHTML = `<video src="${url}" controls preload="metadata"></video>`;
+    } catch {}
   }
 }
 
@@ -1776,6 +1996,7 @@ function bindCockpit(project) {
   bindStoryboardStep(project);
   bindImagesStep(project);
   bindAnimatiqueStep(project);
+  bindProductionStep(project);
 
   if (project.activeStepId === "carte" && project.audio) {
     bindCarteMusicaleAudio(project);
@@ -2315,6 +2536,79 @@ function bindAnimatiqueStep(project) {
     touch(project); persist(); render();
   });
   if (project.audio && project.storyboard.shots.length) updateAnimaticStage(project, 0);
+}
+
+function bindProductionStep(project) {
+  const findShot = (id) => project.storyboard.shots.find((s) => s.id === id);
+
+  document.querySelectorAll("[data-genvideoprompt]").forEach((el) => el.addEventListener("change", () => {
+    const sh = findShot(el.dataset.genvideoprompt);
+    if (sh) { sh.genVideoPrompt = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-selectvideo]").forEach((btn) => btn.addEventListener("click", () => {
+    const [shotId, vId] = btn.dataset.selectvideo.split(":");
+    const sh = findShot(shotId);
+    if (sh) { sh.selectedVideoId = sh.selectedVideoId === vId ? null : vId; touch(project); persist(); render(); }
+  }));
+  document.querySelectorAll("[data-delvideo]").forEach((btn) => btn.addEventListener("click", () => {
+    const [shotId, vId] = btn.dataset.delvideo.split(":");
+    const sh = findShot(shotId);
+    if (sh) {
+      const v = sh.videos.find((x) => x.id === vId);
+      if (v && videoUrlCache.has(v.sourceId)) { URL.revokeObjectURL(videoUrlCache.get(v.sourceId)); videoUrlCache.delete(v.sourceId); }
+      sh.videos = sh.videos.filter((x) => x.id !== vId);
+      if (sh.selectedVideoId === vId) sh.selectedVideoId = null;
+      touch(project); persist(); render();
+    }
+  }));
+  document.querySelectorAll("[data-genvideo]").forEach((btn) => btn.addEventListener("click", async () => {
+    const shotId = btn.dataset.genvideo;
+    const sh = findShot(shotId);
+    if (!sh || videoGenBusy.has(shotId)) return;
+    const refImage = sh.images.find((im) => im.id === sh.selectedImageId);
+    if (!refImage) { toast("Choisis d'abord une image test pour ce plan (étape Images tests)."); return; }
+    const promptEl = document.querySelector(`[data-genvideoprompt="${shotId}"]`);
+    const prompt = (promptEl && promptEl.value.trim()) || buildVideoPrompt(sh, project);
+    if (!prompt) { toast("Rien à générer — précise une action ou un prompt pour ce plan."); return; }
+    videoGenBusy.add(shotId);
+    btn.disabled = true;
+    btn.textContent = "Génération en cours (peut prendre 1-2 min)…";
+    try {
+      const refBlob = await AiXelDB.getBlob(refImage.sourceId);
+      if (!refBlob) throw new Error("Image de référence introuvable localement.");
+      const { blob, cost } = await runVideoGeneration(prompt, refBlob, sh.dur);
+      const srcId = uid();
+      project.sources.push({
+        id: srcId, name: `vidéo_${shotId.slice(0, 6)}_${Date.now().toString(36).slice(-4)}.mp4`,
+        size: blob.size, mime: blob.type || "video/mp4", category: "video", role: "Livrable",
+        addedAt: Date.now(), generated: true,
+      });
+      await AiXelDB.putBlob(srcId, blob);
+      sh.videos.push(defaultShotVideo(srcId));
+      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, prompt, cost, status: "réussi", createdAt: Date.now(), sourceId: srcId });
+      touch(project); persist();
+      toast("Vidéo générée — ajoutée aux candidats de ce plan.");
+    } catch (err) {
+      console.error(err);
+      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, prompt, cost: 0, status: "échoué", error: err.message, createdAt: Date.now() });
+      touch(project); persist();
+      toast(err.message || "Échec de la génération vidéo.");
+    }
+    videoGenBusy.delete(shotId);
+    render();
+  }));
+  document.getElementById("lockProduction")?.addEventListener("click", () => {
+    if (!project.storyboard.shots.some((s) => s.selectedVideoId)) return;
+    project.production.locked = true; project.production.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "production"); if (step) step.status = "done";
+    touch(project); persist(); render();
+    toast("Production verrouillée.");
+  });
+  document.getElementById("reopenProduction")?.addEventListener("click", () => {
+    project.production.locked = false;
+    const step = project.steps.find((s) => s.id === "production"); if (step) step.status = "active";
+    touch(project); persist(); render();
+  });
 }
 
 async function handleFiles(project, fileList) {
