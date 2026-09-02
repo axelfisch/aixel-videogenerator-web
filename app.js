@@ -199,11 +199,38 @@ function blobToDataUrl(blob) {
     reader.readAsDataURL(blob);
   });
 }
+// Les fonctions Netlify (AWS Lambda dessous) refusent toute requête/réponse synchrone au-delà de
+// ~6 Mo — une image de référence importée en haute résolution dépasserait vite cette limite une
+// fois encodée en base64 (+33%), et Netlify la rejette AVANT même que notre code ne s'exécute
+// (d'où un message d'erreur générique de la plateforme plutôt qu'une erreur claire du connecteur —
+// bug réel rencontré par Axel le 2026-09-02). On downscale donc toujours l'image côté client avant
+// envoi : Wan 2.1 480p ne tire de toute façon aucun bénéfice d'une image source en haute résolution
+// (sa case d'entrée est plafonnée à 832×480).
+async function resizeImageForVideoGen(blob, maxDim = 960, quality = 0.85) {
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  if (bitmap.close) bitmap.close();
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Échec de la préparation de l'image de référence."))), "image/jpeg", quality);
+  });
+}
 // Anime l'image test choisie du plan (image→vidéo) via le proxy Netlify. La génération vidéo est
 // nettement plus lente qu'une image (souvent 30s-2min) : on attend une réponse rapide côté
-// serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal.
+// serveur, sinon on interroge generate-video-status.js jusqu'à un état terminal. Le résultat revient
+// comme une URL Replicate (pas en base64, même limite de taille côté réponse) — le client la
+// télécharge lui-même directement pour la stocker localement.
 async function runVideoGeneration(prompt, imageBlob, durSec) {
-  const imageDataUrl = await blobToDataUrl(imageBlob);
+  const resized = await resizeImageForVideoGen(imageBlob);
+  const imageDataUrl = await blobToDataUrl(resized);
+  if (imageDataUrl.length > 4.5 * 1024 * 1024) {
+    throw new Error("Image de référence trop volumineuse même après compression — réessaie avec une autre image.");
+  }
   const frames = videoFramesFor(durSec);
   const res = await fetch("/.netlify/functions/generate-video", {
     method: "POST",
@@ -221,7 +248,10 @@ async function runVideoGeneration(prompt, imageBlob, durSec) {
     attempts++;
   }
   if (data.status !== "succeeded") throw new Error(data.error || "La génération vidéo a échoué ou a pris trop de temps.");
-  const blob = await (await fetch(`data:${data.mime || "video/mp4"};base64,${data.videoBase64}`)).blob();
+  if (!data.videoUrl) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
+  const videoRes = await fetch(data.videoUrl);
+  if (!videoRes.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
+  const blob = await videoRes.blob();
   return { blob, cost: data.cost != null ? data.cost : videoCostFor(durSec) };
 }
 

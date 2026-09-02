@@ -25,24 +25,21 @@ function requireToken() {
   return token;
 }
 
-// Le résultat d'une prédiction réussie est une URL Replicate temporaire — on rapatrie la vidéo
-// tout de suite côté serveur pour ne jamais exposer cette URL (ni sa durée de vie limitée) au
-// navigateur : le client reçoit directement les octets à stocker localement (IndexedDB).
-async function fetchAsBase64(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer.");
-  const buf = Buffer.from(await res.arrayBuffer());
-  const mime = res.headers.get("content-type") || "video/mp4";
-  return { videoBase64: buf.toString("base64"), mime };
-}
-
-async function normalizeSucceeded(prediction, frames) {
+// Le résultat d'une prédiction réussie est une URL Replicate temporaire. Contrairement au
+// connecteur image (V3), on NE rapatrie PAS la vidéo en base64 côté serveur : les fonctions
+// Netlify (AWS Lambda dessous) refusent toute réponse synchrone au-delà de ~6 Mo, et une vidéo
+// (même courte, même en 480p) dépasse vite cette limite une fois encodée en base64 (+33%) — bug
+// réel rencontré par Axel le 2026-09-02 (erreur générique de la plateforme, avant même que ce
+// code ne s'exécute). On renvoie donc directement l'URL Replicate : le client la télécharge
+// lui-même pour la stocker localement (IndexedDB). Cette URL est temporaire et sans donnée
+// sensible (contrairement au jeton API, qui lui ne quitte jamais ce fichier) — l'exposer au
+// navigateur juste le temps d'un téléchargement immédiat ne pose pas de problème.
+function normalizeSucceeded(prediction, frames) {
   const output = prediction.output;
   const url = Array.isArray(output) ? output[0] : output;
   if (!url) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
-  const { videoBase64, mime } = await fetchAsBase64(url);
   const cost = (frames / FPS) * COST_PER_SECOND_USD;
-  return { status: "succeeded", videoBase64, mime, cost, id: prediction.id };
+  return { status: "succeeded", videoUrl: url, cost, id: prediction.id };
 }
 
 function normalizePending(prediction) {
@@ -53,4 +50,4 @@ function normalizeFailed(prediction) {
   return { status: "failed", error: (prediction && prediction.error) || "Génération vidéo échouée côté fournisseur." };
 }
 
-module.exports = { MODEL, API_BASE, FPS, COST_PER_SECOND_USD, requireToken, fetchAsBase64, normalizeSucceeded, normalizePending, normalizeFailed };
+module.exports = { MODEL, API_BASE, FPS, COST_PER_SECOND_USD, requireToken, normalizeSucceeded, normalizePending, normalizeFailed };
