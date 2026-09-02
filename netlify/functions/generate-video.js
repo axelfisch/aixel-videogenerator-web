@@ -4,14 +4,12 @@
 // La génération vidéo est nettement plus lente qu'une image test : on attend une réponse rapide
 // (jusqu'à 25s) puis, si ce n'est pas fini, on renvoie l'id à interroger via
 // generate-video-status.js plutôt que de laisser la requête ouverte plus longtemps.
-const { MODEL, API_BASE, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
+const { MODEL, API_BASE, OUTPUT_FRAMES, FPS, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
 
 // Marqueur temporaire (2026-09-02) — permet de vérifier à distance, via un simple fetch, que le
-// déploiement en cours sert bien CE code (et pas une version précédente restée en ligne) sans avoir
-// besoin d'accéder au tableau de bord Netlify. À retirer une fois la chaîne de déploiement
-// confirmée fiable (idéalement après avoir lié le dépôt GitHub à Netlify pour un déploiement
-// automatique, cf. README).
-const BUILD_MARKER = "2026-09-02-schema-fix-v1";
+// déploiement en cours sert bien CE code sans avoir besoin d'accéder au tableau de bord Netlify.
+// À retirer une fois le connecteur confirmé stable sur plusieurs générations réelles.
+const BUILD_MARKER = "2026-09-02-model-switch-wan22-v1";
 
 exports.handler = async (event) => {
   const headers = { "X-AiXel-Build": BUILD_MARKER };
@@ -23,15 +21,15 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch (e) { body = {}; }
   const prompt = (body.prompt || "").trim();
   const image = body.image;
-  const aspectRatio = body.aspectRatio === "9:16" ? "9:16" : "16:9";
   if (!image) return { statusCode: 400, headers, body: JSON.stringify({ error: "Image de référence manquante — choisis d'abord une image test pour ce plan." }) };
 
   try {
     const token = requireToken();
-    // Champs alignés sur le schéma RÉEL du modèle (vérifié le 2026-09-02 sur
-    // replicate.com/wavespeedai/wan-2.1-i2v-480p/api/schema) — plus de num_frames/max_area, qui
-    // n'existent plus côté fournisseur et faisaient échouer chaque appel (voir _replicate-video.js).
-    const input = { image, aspect_ratio: aspectRatio };
+    // Champs du modèle wan-video/wan-2.2-i2v-a14b (vérifiés le 2026-09-02 sur
+    // replicate.com/wan-video/wan-2.2-i2v-a14b/api/schema) : image, prompt, num_frames (81-100),
+    // resolution ("480p"/"720p"), frames_per_second (5-24). On reste sur les valeurs par défaut du
+    // modèle (81 images, 480p, 16 im/s) pour une sortie prévisible et au tarif fixe le plus bas.
+    const input = { image, num_frames: OUTPUT_FRAMES, resolution: "480p", frames_per_second: FPS };
     if (prompt) input.prompt = prompt;
 
     const res = await fetch(`${API_BASE}/models/${MODEL}/predictions`, {
@@ -46,9 +44,7 @@ exports.handler = async (event) => {
     const rawText = await res.text();
     let prediction;
     try { prediction = JSON.parse(rawText); } catch (e) { prediction = {}; }
-    // _debug (temporaire, 2026-09-02) : renvoie le statut HTTP brut de Replicate et le champ
-    // d'entrée exact envoyé, pour confirmer en un seul appel ce qui a réellement été transmis —
-    // sans avoir besoin des logs du tableau de bord Netlify. À retirer une fois confirmé.
+    // _debug (temporaire, 2026-09-02) — cf. commentaire sur BUILD_MARKER.
     const _debug = { sentInput: input, replicateHttpStatus: res.status, replicatePredictionStatus: prediction.status || null };
     if (!res.ok) {
       return { statusCode: res.status, headers, body: JSON.stringify({ error: prediction.detail || prediction.error || "Le fournisseur de génération vidéo a refusé la demande.", _debug }) };

@@ -162,29 +162,22 @@ async function runImageGeneration(prompt, negativePrompt) {
 }
 
 // V3.5 (§8.10 Production Router) — connecteur vidéo, réservé aux plans dont l'image test est déjà
-// choisie (jamais en masse, §8.10). Fournisseur : Replicate (modèle Wan 2.1 image→vidéo, 480p) —
-// et non TokenRouter comme envisagé initialement (2026-09-02) : le contrat d'API vidéo de
-// TokenRouter n'est pas documenté publiquement, alors que celui-ci l'est, réutilise le jeton
-// Replicate déjà configuré et déjà facturé chez Axel, sans nouvelle mise en place. À reconsidérer
-// si Axel confirme le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
-// Correctif du 2026-09-02 : le modèle a changé de schéma d'entrée côté Replicate depuis l'écriture
-// du connecteur initial — `num_frames` et `max_area` (qui permettaient de viser la durée du plan)
-// n'existent plus du tout (confirmé en lisant le schéma live sur replicate.com/wavespeedai/
-// wan-2.1-i2v-480p/api/schema) ; seul `aspect_ratio` ("16:9"/"9:16") reste réglable. C'est la vraie
-// cause de l'échec systématique "(E002)" qu'a rencontré Axel : on envoyait deux champs que le
-// fournisseur ne reconnaît plus, ce qui faisait planter son wrapper d'inférence accéléré à chaque
-// appel, quel que soit le plan ou l'image. La sortie est donc désormais une durée FIXE côté
-// fournisseur (~5,1s, vérifié sur un exemple public), non ajustable — le coût est fixe lui aussi.
+// choisie (jamais en masse, §8.10). Historique fournisseur : Replicate/TokenRouter (2026-09-02,
+// TokenRouter écarté — API vidéo non documentée publiquement), puis Replicate/wavespeedai/
+// wan-2.1-i2v-480p (2026-09-02, schéma corrigé — num_frames/max_area remplacés par aspect_ratio —
+// mais échec confirmé persistant CÔTÉ FOURNISSEUR même avec un payload conforme, HTTP 201 mais
+// prédiction "failed" à chaque fois). Bascule finale (même jour) sur Replicate/wan-video/
+// wan-2.2-i2v-a14b — même famille de modèle Wan, mais hébergé par un fournisseur d'inférence
+// différent (Pruna AI, pas WaveSpeedAI) : sortie fixe ~5,1s (81 images à 16 im/s, minimum du
+// modèle), coût fixe et non plus au temps ($0,40/vidéo en 480p, cf. _replicate-video.js).
 const VIDEO_GEN_PROVIDER = {
-  id: "replicate-wan2.1-i2v-480p",
-  label: "Replicate — Wan 2.1 (image→vidéo, 480p)",
-  costPerSecond: 0.09, // tarif Replicate au 2026-09 (à réviser si le fournisseur change ses prix)
-  fps: 16,
-  fixedOutputSec: 81 / 16, // 5.0625s — durée fixe imposée par le fournisseur, non paramétrable
-  aspectRatio: "16:9", // seule valeur du brief projet (§ contraintes : "YouTube 16:9 en priorité")
+  id: "replicate-wan2.2-i2v-a14b",
+  label: "Replicate — Wan 2.2 (image→vidéo, 480p)",
+  fixedCostUsd: 0.4, // tarif fixe par vidéo en 480p (à réviser si le fournisseur change ses prix)
+  fixedOutputSec: 81 / 16, // 5.0625s — durée fixe (minimum de frames du modèle), non paramétrable
 };
 function videoCostFor() {
-  return VIDEO_GEN_PROVIDER.fixedOutputSec * VIDEO_GEN_PROVIDER.costPerSecond;
+  return VIDEO_GEN_PROVIDER.fixedCostUsd;
 }
 // Réutilise le même prompt que l'image test choisie (déjà validé visuellement par Axel), sans
 // jamais rien inventer de plus — juste ce qu'il a déjà écrit ailleurs dans le projet. Priorité :
@@ -239,7 +232,7 @@ async function runVideoGeneration(prompt, imageBlob) {
   const res = await fetch("/.netlify/functions/generate-video", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, image: imageDataUrl, aspectRatio: VIDEO_GEN_PROVIDER.aspectRatio }),
+    body: JSON.stringify({ prompt, image: imageDataUrl }),
   });
   let data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Échec de la génération vidéo (connecteur indisponible).");
@@ -1493,7 +1486,7 @@ function renderProductionStep(project) {
       <h1>Production</h1>
       <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Production verrouillée" : `${readyCount}/${eligible.length} plan${eligible.length > 1 ? "s" : ""} avec une vidéo choisie`}</span>
     </div>
-    <p class="page-sub">Génère la vidéo définitive de chaque plan approuvé — jamais en masse, un plan à la fois, sur l'image test déjà choisie. Fournisseur : ${VIDEO_GEN_PROVIDER.label}, ≈ $${VIDEO_GEN_PROVIDER.costPerSecond.toFixed(2)}/seconde de vidéo. Compare des variantes, relance ciblée en cas d'échec — les coûts réels sont journalisés séparément des images tests.</p>
+    <p class="page-sub">Génère la vidéo définitive de chaque plan approuvé — jamais en masse, un plan à la fois, sur l'image test déjà choisie. Fournisseur : ${VIDEO_GEN_PROVIDER.label}, ≈ $${VIDEO_GEN_PROVIDER.fixedCostUsd.toFixed(2)}/vidéo (~${VIDEO_GEN_PROVIDER.fixedOutputSec.toFixed(1)}s, durée fixe). Compare des variantes, relance ciblée en cas d'échec — les coûts réels sont journalisés séparément des images tests.</p>
     ${okGens.length ? `<p class="gen-summary">🎬 ${okGens.length} vidéo${okGens.length > 1 ? "s" : ""} générée${okGens.length > 1 ? "s" : ""} ce projet · ≈ $${genSpend.toFixed(2)} dépensés</p>` : ""}
     ${eligible.length < shots.length ? `<div class="dup-banner">ℹ️ ${shots.length - eligible.length} plan${shots.length - eligible.length > 1 ? "s n'ont" : " n'a"} pas encore d'image test choisie — ${shots.length - eligible.length > 1 ? "ils restent" : "il reste"} hors production tant que ce n'est pas fait dans Images tests.</div>` : ""}
 
