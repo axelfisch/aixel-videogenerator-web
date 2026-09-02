@@ -189,11 +189,12 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
   familles de modèles vidéo avec une API prédictions déjà éprouvée dans ce dépôt (§V3) et le jeton
   `REPLICATE_API_TOKEN` déjà configuré chez Axel — aucune nouvelle mise en place. À reconsidérer si
   Axel confirme un jour le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
-- **Modèle** : `wavespeedai/wan-2.1-i2v-480p` (image→vidéo, 480p). Durée de sortie **fixe, non
-  réglable** côté fournisseur — ~5,0625s (81 images à 16 im/s, cf. correctif ci-dessous) — ≈$0,09/
-  seconde de sortie au tarif Replicate de 2026-09 (à réviser si le fournisseur change ses prix).
-  Un plan plus court ou plus long que ~5,1s le signale honnêtement dans l'UI plutôt que de laisser
-  croire que la durée du plan a été respectée.
+- **Modèle** : `wan-video/wan-2.2-i2v-a14b` (image→vidéo, 480p, hébergé par Pruna AI — voir
+  correctif ci-dessous pour l'historique du choix). Durée de sortie **fixe, non réglable** côté
+  fournisseur — ~5,0625s (81 images à 16 im/s, minimum du modèle) — $0,40/vidéo à tarif fixe (pas
+  au temps) au tarif Replicate de 2026-09 (à réviser si le fournisseur change ses prix). Un plan
+  plus court ou plus long que ~5,1s le signale honnêtement dans l'UI plutôt que de laisser croire
+  que la durée du plan a été respectée.
 - **Deux fonctions serveur** (`netlify/functions/generate-video.js` et
   `generate-video-status.js`, connecteur isolé dans `_replicate-video.js`) réutilisent le même
   `REPLICATE_API_TOKEN` que les images tests — aucune variable d'environnement supplémentaire à
@@ -217,17 +218,32 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
 
 Toute génération vidéo échouait avec le même message générique et le même identifiant
 (`An error occurred while processing your request (E002) (1cah9wlWR9)`), quels que soient le plan,
-l'image ou le prompt, malgré plusieurs redéploiements confirmés. Diagnostiqué en reproduisant
-l'appel en direct contre le site déployé (requêtes envoyées à la vraie fonction Netlify depuis un
-navigateur, hors relais copier-coller) puis en comparant au schéma d'entrée réel du modèle publié
-sur `replicate.com/wavespeedai/wan-2.1-i2v-480p/api/schema` : **le modèle a changé de schéma depuis
-l'écriture du connecteur initial** — `num_frames` et `max_area` (qui servaient à viser la durée du
-plan) n'existent plus du tout, seuls `image`, `prompt` et `aspect_ratio` subsistent. Le connecteur
-envoyait donc deux champs disparus à chaque appel, ce qui faisait planter le wrapper d'inférence
-accéléré de WaveSpeedAI de façon identique et quasi instantanée (avant même le vrai calcul vidéo).
-Corrigé en alignant `generate-video.js`/`generate-video-status.js`/`_replicate-video.js` sur le
-schéma actuel — la durée de sortie n'est donc plus réglable (fixe ~5,1s côté fournisseur), le coût
-l'est donc aussi. Retirer ce paragraphe si le fournisseur réintroduit un jour un contrôle de durée.
+l'image ou le prompt, malgré plusieurs redéploiements confirmés. Résolu en trois étapes, chacune
+vérifiée en direct contre le site déployé (requêtes envoyées à la vraie fonction Netlify depuis un
+navigateur, plutôt que de deviner à partir de relais copier-coller) :
+
+1. **Schéma d'entrée obsolète** — `wavespeedai/wan-2.1-i2v-480p` avait changé de schéma depuis
+   l'écriture du connecteur initial : `num_frames`/`max_area` (qui visaient la durée du plan)
+   n'existaient plus, remplacés par `aspect_ratio`. Corrigé — un vrai bug, mais **insuffisant** :
+   même avec un payload exactement conforme (confirmé via un marqueur de build temporaire et
+   l'écho du statut HTTP brut de Replicate), l'échec persistait identique, HTTP 201 mais prédiction
+   `failed`. Preuve que le souci était côté fournisseur pour ce modèle précis (wrapper d'inférence
+   accéléré WaveSpeedAI), pas dans notre code.
+2. **Changement de modèle** — bascule sur `wan-video/wan-2.2-i2v-a14b`, même famille Wan mais
+   hébergé par un fournisseur d'inférence différent (Pruna AI). A immédiatement fonctionné : la
+   prédiction tourne réellement (~28s, cohérent avec le temps annoncé par le fournisseur).
+3. **CORS sur l'URL de livraison** — une fois la vidéo générée, le téléchargement client
+   (`fetch(videoUrl)`, ajouté lors du correctif de taille de payload plus tôt le même jour) échouait
+   silencieusement ("Failed to fetch") : `replicate.delivery` n'envoie pas d'en-têtes CORS
+   permissifs pour `fetch()` (contrairement à un `<video src>`, qui charge sans CORS). Corrigé en
+   revenant au rapatriement en base64 côté serveur — même principe fiable que le connecteur image
+   (§V3) — avec un garde-fou de taille (5,5 Mo en base64, sous la limite de réponse synchrone
+   Netlify ~6 Mo ; le premier seuil à 4,5 Mo, copié du budget d'image d'entrée bien plus légère,
+   s'est révélé trop bas pour une vraie vidéo et a été relevé après un premier refus en direct).
+
+Génération de bout en bout vérifiée en direct : prédiction réussie, vidéo rapatriée en base64,
+signature MP4 valide (`ftypisom`), ~3,8 Mo, $0,40 facturés. Le connecteur est désormais isolé dans
+`_replicate-video.js` — un futur changement de fournisseur ne devrait toucher que ce fichier.
 
 ## Prochaine étape
 
