@@ -189,10 +189,11 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
   familles de modèles vidéo avec une API prédictions déjà éprouvée dans ce dépôt (§V3) et le jeton
   `REPLICATE_API_TOKEN` déjà configuré chez Axel — aucune nouvelle mise en place. À reconsidérer si
   Axel confirme un jour le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
-- **Modèle** : `wavespeedai/wan-2.1-i2v-480p` (image→vidéo, 480p, jusqu'à ~100 images à 16 im/s
-  soit ~6,25s) — ≈$0,09/seconde de sortie au tarif Replicate de 2026-09 (à réviser si le
-  fournisseur change ses prix). Un plan plus long que ~6,25s est honnêtement plafonné avec un
-  avertissement affiché avant de générer, plutôt que silencieusement tronqué sans prévenir.
+- **Modèle** : `wavespeedai/wan-2.1-i2v-480p` (image→vidéo, 480p). Durée de sortie **fixe, non
+  réglable** côté fournisseur — ~5,0625s (81 images à 16 im/s, cf. correctif ci-dessous) — ≈$0,09/
+  seconde de sortie au tarif Replicate de 2026-09 (à réviser si le fournisseur change ses prix).
+  Un plan plus court ou plus long que ~5,1s le signale honnêtement dans l'UI plutôt que de laisser
+  croire que la durée du plan a été respectée.
 - **Deux fonctions serveur** (`netlify/functions/generate-video.js` et
   `generate-video-status.js`, connecteur isolé dans `_replicate-video.js`) réutilisent le même
   `REPLICATE_API_TOKEN` que les images tests — aucune variable d'environnement supplémentaire à
@@ -211,6 +212,22 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
   calculé correctement à partir de la durée réelle du plan, prompt vidéo correctement repris du
   prompt de l'image choisie, journal vidéo jamais mélangé au journal des images, verrouillage et
   persistance au rechargement — zéro erreur console.
+
+## Correctif (2026-09-02) — échec systématique "(E002)" à chaque génération vidéo
+
+Toute génération vidéo échouait avec le même message générique et le même identifiant
+(`An error occurred while processing your request (E002) (1cah9wlWR9)`), quels que soient le plan,
+l'image ou le prompt, malgré plusieurs redéploiements confirmés. Diagnostiqué en reproduisant
+l'appel en direct contre le site déployé (requêtes envoyées à la vraie fonction Netlify depuis un
+navigateur, hors relais copier-coller) puis en comparant au schéma d'entrée réel du modèle publié
+sur `replicate.com/wavespeedai/wan-2.1-i2v-480p/api/schema` : **le modèle a changé de schéma depuis
+l'écriture du connecteur initial** — `num_frames` et `max_area` (qui servaient à viser la durée du
+plan) n'existent plus du tout, seuls `image`, `prompt` et `aspect_ratio` subsistent. Le connecteur
+envoyait donc deux champs disparus à chaque appel, ce qui faisait planter le wrapper d'inférence
+accéléré de WaveSpeedAI de façon identique et quasi instantanée (avant même le vrai calcul vidéo).
+Corrigé en alignant `generate-video.js`/`generate-video-status.js`/`_replicate-video.js` sur le
+schéma actuel — la durée de sortie n'est donc plus réglable (fixe ~5,1s côté fournisseur), le coût
+l'est donc aussi. Retirer ce paragraphe si le fournisseur réintroduit un jour un contrôle de durée.
 
 ## Prochaine étape
 
