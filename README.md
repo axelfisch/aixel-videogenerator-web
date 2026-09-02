@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V0.5)
+# AiXel VideoGenerator — reprise en code source (V0 → V1)
 
 ## Pourquoi cette reconstruction
 
@@ -36,11 +36,36 @@ sans étape de build — exactement le même choix technique que pour `aixeln-ly
 - **Barrière verrouillable** comme la carte musicale : "Verrouiller l'inventaire" fige les sources et
   active l'étape suivante (Audio verrouillé), réouvrable à tout moment.
 
-## Prochaine étape (V1 — Préproduction musicale)
+## V1 — Préproduction musicale : analyse audio locale réelle (fait)
 
-Brancher une vraie analyse audio locale (Web Audio API, dans l'esprit de Visual Melody) sur le fichier
-audio détecté dans les sources, pour remplacer la forme d'onde et les métriques simulées de la Carte
-musicale — et faire de "Audio verrouillé" une étape réellement fonctionnelle plutôt qu'un espace réservé.
+- **Analyse portée depuis AiXel Visual Melody** : plutôt que réinventer l'analyse audio, le module
+  `audio-analysis.js` reprend telle quelle la méthode qui tourne déjà en production sur
+  [visualmelody.netlify.app](https://visualmelody.netlify.app) — décodage `AudioContext.decodeAudioData`,
+  mixage mono, forme d'onde par bin de crête, énergie RMS (30 fps), estimation du BPM par intervalles
+  entre pics d'enveloppe. Même méthode, réécrite en JS vanille (Visual Melody est en TypeScript/Vite,
+  VideoGenerator reste volontairement sans étape de build).
+- **Honnêteté préservée** : comme dans Visual Melody, le BPM est explicitement une estimation "MVP"
+  par enveloppe énergétique, pas une détection musicale professionnelle — l'UI ne prétend jamais plus
+  qu'elle ne fait.
+- **Nouveau pour VideoGenerator** : `proposeSections`, une heuristique de regroupement de la timeline
+  d'énergie en sections nommées (Intro/Couplet/Refrain/Pont/Final), absente de Visual Melody (qui n'a
+  pas besoin de carte musicale). Explicitement présentée comme une **proposition à corriger**, pas une
+  analyse de structure musicale au sens propre.
+- **Étape "Audio verrouillé" réellement fonctionnelle** : détecte le fichier audio importé dans les
+  sources, propose de lancer l'analyse locale, affiche BPM/durée/crête/profil énergétique réels une
+  fois l'analyse faite, verrouillable/réouvrable comme les autres barrières.
+- **Carte musicale connectée aux vraies données** : forme d'onde réelle, sections réellement détectées
+  (titres éditables), lecture audio réelle (lire/pause, navigation en cliquant sur la forme d'onde,
+  temps affiché en direct) — le tout persisté (IndexedDB pour le fichier, localStorage pour les
+  métadonnées), donc l'analyse et la lecture survivent au rechargement de la page. Le projet pilote
+  BMW/BNC reste en données de démonstration (pas de fichier audio réel stocké), donc son bouton lecture
+  affiche honnêtement "fichier introuvable localement" plutôt que de faire semblant.
+
+## Prochaine étape (V1.5 — Brief créatif et bibles visuelles)
+
+Brancher les étapes suivantes du pipeline (brief créatif, bibles visuelles) sur les vraies données de
+sources et d'analyse audio désormais disponibles, avant d'envisager toute génération IA (qui nécessitera
+la même architecture "clé API jamais côté client" que pour AiXeLN).
 
 ## Déployer
 
@@ -63,4 +88,6 @@ npx netlify-cli deploy --prod
 - `index.html` — coquille de la page
 - `styles.css` — thème sombre cyan/magenta/or, layout 3 colonnes responsive
 - `app.js` — état, rendu, logique (state/render/persist, comme aixeln-lyricsgenerator-web)
+- `db.js` — wrapper IndexedDB (`AiXelDB`) pour le stockage des fichiers binaires
+- `audio-analysis.js` — analyse audio locale (`AiXelAudio`), portée depuis AiXel Visual Melody
 - `netlify.toml` — déploiement statique simple

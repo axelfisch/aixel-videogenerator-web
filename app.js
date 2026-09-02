@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V0.5 · 2026-09-01 (sources et inventaire)";
+const BUILD = "V1 · 2026-09-01 (analyse audio locale)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -112,6 +112,7 @@ function newProjectRecord(name, artist) {
     sources: [],
     sourcesLocked: false,
     audio: null,
+    audioLocked: false,
     playedRatio: 0,
     structure: [],
     decision: { selected: null, locked: false, lockedAt: null },
@@ -136,7 +137,8 @@ function demoProjectRecord() {
       { id: "src-4", name: "logo_aixel_studio.svg", size: 18_000, mime: "image/svg+xml", category: "logo", role: "Référence", addedAt: now, demo: true },
     ],
     sourcesLocked: true,
-    audio: { file: "BMW_BNC.wav", duration: 187.12, bpm: 117, peak: 3.1, profile: "Énergique" },
+    audio: { sourceId: "src-1", file: "BMW_BNC.wav", duration: 187.12, bpm: 117, peak: 3.1, profile: "Énergique", waveform: null },
+    audioLocked: true,
     playedRatio: 0.28,
     structure: STRUCTURE,
     decision: { selected: null, locked: false, lockedAt: null },
@@ -195,6 +197,7 @@ function render() {
     return;
   }
   const project = currentProject();
+  stopAudioPlaybackIfStale(project);
   const step = project.steps.find((s) => s.id === project.activeStepId) || project.steps[0];
   app.innerHTML = `
     ${renderLeftRail(project)}
@@ -301,7 +304,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <div class="mark">A</div>
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V0.5"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V1"}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
@@ -343,25 +346,82 @@ function renderProjectMenu() {
 function renderMain(project, step) {
   const crumb = `${project.name.toUpperCase()} / ${STAGE_LABEL[step.id] || ""}`;
   if (step.id === "sources") return `<div class="crumb">${crumb}</div>` + renderSourcesStep(project);
+  if (step.id === "audio") return `<div class="crumb">${crumb}</div>` + renderAudioStep(project);
   if (step.id === "carte" && project.audio) return `<div class="crumb">${crumb}</div>` + renderCarteMusicale(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
 function renderPlaceholder(project, step) {
-  const audioSrc = project.sources.find((s) => s.category === "audio");
-  let hint = "Cette étape sera construite dans une prochaine tranche (voir la feuille de route).";
-  if (step.id === "audio" && audioSrc) {
-    hint = `Fichier candidat détecté dans les sources : <b>${escapeHtml(audioSrc.name)}</b> (${fmtBytes(audioSrc.size)}). Le verrouillage réel de l'audio et son analyse locale arrivent à l'étape suivante.`;
-  } else if (step.id === "audio") {
-    hint = "Aucun fichier audio dans les sources pour l'instant — retourne à l'étape Sources pour en importer un.";
-  }
   return `
     <div class="page-head"><h1>${step.name}</h1></div>
-    <p class="page-sub">${hint}</p>
+    <p class="page-sub">Cette étape sera construite dans une prochaine tranche (voir la feuille de route).</p>
     <div class="card empty-card">
       <div class="empty-hint">🚧 ${escapeHtml(step.name)} — pas encore construit</div>
     </div>
   `;
+}
+
+// ---------- Étape Audio verrouillé (analyse locale réelle) ----------
+
+function renderAudioStep(project) {
+  const audioSrc = project.sources.find((s) => s.category === "audio");
+  if (!audioSrc) {
+    return `
+      <div class="page-head"><h1>Audio verrouillé</h1></div>
+      <p class="page-sub">Aucun fichier audio dans les sources pour l'instant.</p>
+      <div class="card empty-card"><div class="empty-hint">Retourne à l'étape Sources pour importer un fichier audio.</div></div>
+    `;
+  }
+  if (!project.audio) {
+    return `
+      <div class="page-head"><h1>Audio verrouillé</h1></div>
+      <p class="page-sub">Fichier candidat détecté dans les sources : <b>${escapeHtml(audioSrc.name)}</b> (${fmtBytes(audioSrc.size)}). L'analyse tourne 100% localement dans ton navigateur (forme d'onde, énergie, BPM estimé, proposition de structure) — rien n'est envoyé nulle part.</p>
+      <div class="card">
+        <div class="analyze-cta">
+          <div class="decision-icon">♪</div>
+          <div>
+            <b>Prêt à analyser ${escapeHtml(audioSrc.name)}</b>
+            <p class="page-sub" style="margin:4px 0 0">Ça prend quelques secondes selon la taille du fichier.</p>
+          </div>
+          <button class="btn primary" id="analyzeBtn">Lancer l'analyse locale →</button>
+        </div>
+      </div>
+    `;
+  }
+  const a = project.audio;
+  return `
+    <div class="page-head">
+      <h1>Audio verrouillé</h1>
+      <span class="status-chip ${project.audioLocked ? "" : "chip-pending"}">${project.audioLocked ? "Verrouillé" : "Analysé — à valider"}</span>
+    </div>
+    <p class="page-sub">Analyse locale réelle (Web Audio API), même méthode que dans AiXel Visual Melody.</p>
+    ${project.audioLocked ? `<div class="locked-banner">🔒 Audio verrouillé — référence pour la carte musicale et la suite.
+      <button class="btn small reopen" id="reopenAudio">Rouvrir</button></div>` : ""}
+    <div class="card">
+      <div class="metric-row">
+        <div class="metric"><b>${Math.round(a.bpm)}</b><small>BPM estimé</small></div>
+        <div class="metric"><b>${fmtTime(a.duration)}</b><small>durée</small></div>
+        <div class="metric"><b>${(a.peak * 100).toFixed(0)}%</b><small>crête</small></div>
+        <div class="metric"><b style="font-size:14px">${a.profile}</b><small>profil dominant</small></div>
+      </div>
+    </div>
+    ${!project.audioLocked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller l'audio</h3>
+          <p>Cette analyse (BPM, énergie, structure proposée) devient la référence pour la carte musicale. Tu pourras la rouvrir et la relancer plus tard.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockAudio">Verrouiller l'audio →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function profileFromEnergy(avg) {
+  if (avg >= 0.6) return "Énergique";
+  if (avg >= 0.35) return "Équilibré";
+  return "Doux";
 }
 
 // ---------- Étape Sources et inventaire ----------
@@ -455,12 +515,21 @@ async function loadThumbnails(project) {
 // ---------- Étape Carte musicale (démo BMW/BNC, inchangée depuis V0) ----------
 
 function renderCarteMusicale(project) {
+  const isDemo = project.id === "bmw-bnc";
+  const wave = project.audio.waveform && project.audio.waveform.length ? project.audio.waveform : WAVE;
+  const structure = project.structure.map((s) => ({
+    ...s,
+    dur: s.dur != null ? s.dur : Math.max(0, (s.end ?? s.start) - s.start),
+    tag: s.tag != null ? s.tag : "",
+  }));
+  const refrainSection = structure.find((s) => /^Refrain/.test(s.label || ""));
+
   return `
     <div class="page-head">
       <h1>Carte musicale</h1>
-      <span class="status-chip">Analyse locale terminée</span>
+      <span class="status-chip">${isDemo ? "Analyse locale terminée" : "Structure proposée — à corriger"}</span>
     </div>
-    <p class="page-sub">La structure est analysée. Ta validation artistique décidera du rythme du storyboard.</p>
+    <p class="page-sub">${isDemo ? "La structure est analysée." : "Sections proposées automatiquement à partir des niveaux d'énergie — pas d'une vraie analyse de structure musicale (accords, mesures). Renomme-les librement."} Ta validation artistique décidera du rythme du storyboard.</p>
 
     ${project.decision.locked ? `<div class="locked-banner">🔒 Carte musicale verrouillée — cette étape sert désormais de référence pour le storyboard.
       <button class="btn small reopen" id="reopenBtn">Rouvrir</button></div>` : ""}
@@ -468,38 +537,40 @@ function renderCarteMusicale(project) {
     <div class="card audio-card">
       <div class="row">
         <button class="play-btn" id="playBtn" aria-label="Lire">▶</button>
-        <div class="audio-meta"><div class="fname">${project.audio.file}</div><div class="ftag">MASTER AUDIO · VERROUILLÉ</div></div>
-        <div class="audio-time">${fmtTime(project.audio.duration * project.playedRatio)} / ${fmtTime(project.audio.duration)}</div>
+        <div class="audio-meta"><div class="fname">${escapeHtml(project.audio.file)}</div><div class="ftag">MASTER AUDIO · VERROUILLÉ</div></div>
+        <div class="audio-time" id="audioTimeLabel">${fmtTime(0)} / ${fmtTime(project.audio.duration)}</div>
       </div>
       <div class="waveform" id="waveform">
-        ${WAVE.map((h, i) => `<i style="height:${Math.round(h * 100)}%" class="${i / WAVE.length < project.playedRatio ? "played" : ""}"></i>`).join("")}
+        ${wave.map((h) => `<i style="height:${Math.max(8, Math.round(h * 100))}%"></i>`).join("")}
       </div>
       <div class="metric-row">
-        <div class="metric"><b>${project.audio.bpm}</b><small>BPM estimé</small></div>
+        <div class="metric"><b>${Math.round(project.audio.bpm)}</b><small>BPM estimé</small></div>
         <div class="metric"><b>${fmtTime(project.audio.duration)}</b><small>durée</small></div>
-        <div class="metric"><b>+${project.audio.peak.toFixed(1)} dB</b><small>crête</small></div>
+        <div class="metric"><b>${isDemo ? "+" + project.audio.peak.toFixed(1) + " dB" : (project.audio.peak * 100).toFixed(0) + "%"}</b><small>crête</small></div>
         <div class="metric"><b style="font-size:14px">${project.audio.profile}</b><small>profil dominant</small></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="section-head"><h2>Structure proposée</h2><span class="count">${project.structure.length} sections · 24 plans recommandés</span></div>
+      <div class="section-head"><h2>Structure proposée</h2><span class="count">${structure.length} section${structure.length > 1 ? "s" : ""}${isDemo ? " · 24 plans recommandés" : ""}</span></div>
       <div class="struct-grid">
-        ${project.structure.map((s, i) => `
-          <div class="struct-card ${s.id === "refrain" ? "current" : ""}">
+        ${structure.map((s, i) => `
+          <div class="struct-card ${refrainSection && s.id === refrainSection.id ? "current" : ""}">
             <div class="top"><span>0${i + 1}</span><span>${fmtTime(s.start)}</span></div>
-            <div class="title">${s.label}</div><div class="sub">${s.tag}</div>
+            ${isDemo ? `<div class="title">${escapeHtml(s.label)}</div>` : `<input class="title-input" data-section="${s.id}" value="${escapeAttr(s.label)}" />`}
+            <div class="sub">${escapeHtml(s.tag)}</div>
             <div class="energy-bar"><i style="width:${s.energy}%"></i></div>
             <div class="dur">${s.energy}% énergie · ${fmtTime(s.dur)}</div>
           </div>`).join("")}
       </div>
     </div>
 
+    ${refrainSection ? `
     <div class="card decision-card">
       <div class="decision-icon">✦</div>
       <div class="decision-body">
         <h3>Décision artistique requise</h3>
-        <p>Le refrain doit-il accélérer le montage ? L'analyse détecte un pic à 00:51. Je propose des plans de 2,8&nbsp;s, contre 4,6&nbsp;s dans le couplet.</p>
+        <p>${escapeHtml(refrainSection.label)} doit-il accélérer le montage ? L'analyse détecte un pic à ${fmtTime(refrainSection.start)}. Je propose des plans de 2,8&nbsp;s, contre 4,6&nbsp;s dans un couplet.</p>
         <div class="decision-opts">
           <button class="opt-btn ${project.decision.selected === "accelerer" ? "selected" : ""}" data-opt="accelerer" ${project.decision.locked ? "disabled" : ""}><b>A · Accélérer</b><small>8 plans · impact fort</small></button>
           <button class="opt-btn ${project.decision.selected === "respirer" ? "selected" : ""}" data-opt="respirer" ${project.decision.locked ? "disabled" : ""}><b>B · Respirer</b><small>5 plans · plus cinématique</small></button>
@@ -510,7 +581,87 @@ function renderCarteMusicale(project) {
         <button class="btn primary" id="lockBtn" ${project.decision.selected ? "" : "disabled"}>${project.decision.locked ? "Rouvrir la barrière" : "Valider la direction →"}</button>
       </div>
     </div>
+    ` : ""}
   `;
+}
+
+// ---------- Lecture audio réelle (élément persistant hors du DOM re-rendu) ----------
+let audioEl = null;
+let audioElKey = null;
+
+function audioKeyFor(project) {
+  return project.audio && project.audio.sourceId ? `${project.id}:${project.audio.sourceId}` : null;
+}
+
+function stopAudioPlaybackIfStale(project) {
+  const key = project ? audioKeyFor(project) : null;
+  const wantsCarte = project && project.activeStepId === "carte" && project.audio;
+  if (audioEl && (!wantsCarte || audioElKey !== key)) audioEl.pause();
+}
+
+async function loadAudioEl(project) {
+  const key = audioKeyFor(project);
+  if (!key) return null;
+  if (audioEl && audioElKey === key) return audioEl;
+  if (audioEl) { audioEl.pause(); audioEl.remove(); }
+  const blob = await AiXelDB.getBlob(project.audio.sourceId);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  const el = document.createElement("audio");
+  el.src = url;
+  el.preload = "metadata";
+  el.style.display = "none";
+  document.body.appendChild(el);
+  el.addEventListener("timeupdate", () => syncAudioUI());
+  el.addEventListener("play", () => syncAudioUI());
+  el.addEventListener("pause", () => syncAudioUI());
+  el.addEventListener("ended", () => syncAudioUI());
+  audioEl = el;
+  audioElKey = key;
+  return el;
+}
+
+function syncAudioUI() {
+  if (!audioEl) return;
+  const timeLabel = document.getElementById("audioTimeLabel");
+  const playBtn = document.getElementById("playBtn");
+  const wf = document.getElementById("waveform");
+  if (timeLabel) timeLabel.textContent = `${fmtTime(audioEl.currentTime || 0)} / ${fmtTime(audioEl.duration || 0)}`;
+  if (playBtn) playBtn.textContent = audioEl.paused ? "▶" : "⏸";
+  if (wf && audioEl.duration) {
+    const ratio = audioEl.currentTime / audioEl.duration;
+    const bars = wf.children;
+    const cut = Math.floor(ratio * bars.length);
+    for (let i = 0; i < bars.length; i++) bars[i].classList.toggle("played", i < cut);
+  }
+}
+
+function bindCarteMusicaleAudio(project) {
+  const playBtn = document.getElementById("playBtn");
+  const wf = document.getElementById("waveform");
+  if (playBtn) playBtn.addEventListener("click", async () => {
+    playBtn.disabled = true;
+    try {
+      const el = await loadAudioEl(project);
+      if (!el) { toast("Fichier audio introuvable localement."); return; }
+      if (el.paused) await el.play(); else el.pause();
+    } catch { toast("Lecture impossible."); }
+    playBtn.disabled = false;
+  });
+  if (wf) wf.addEventListener("click", async (e) => {
+    const rect = wf.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const el = await loadAudioEl(project);
+    if (!el) return;
+    const setTime = () => { el.currentTime = ratio * (el.duration || project.audio.duration); syncAudioUI(); };
+    if (el.readyState >= 1) setTime(); else el.addEventListener("loadedmetadata", setTime, { once: true });
+  });
+  document.querySelectorAll(".title-input").forEach((input) => {
+    input.addEventListener("change", () => {
+      const s = project.structure.find((x) => x.id === input.dataset.section);
+      if (s) { s.label = input.value.trim() || s.label; touch(project); persist(); }
+    });
+  });
 }
 
 function renderRightRail(project) {
@@ -559,6 +710,12 @@ function bindCockpit(project) {
 
   bindNewProjectModal();
   bindSourcesStep(project);
+  bindAudioStep(project);
+
+  if (project.activeStepId === "carte" && project.audio) {
+    bindCarteMusicaleAudio(project);
+    syncAudioUI();
+  }
 
   // Carte musicale (démo)
   document.querySelectorAll(".opt-btn").forEach((btn) => btn.addEventListener("click", () => {
@@ -576,6 +733,7 @@ function bindCockpit(project) {
       project.decision.locked = true; project.decision.lockedAt = Date.now();
       const step = project.steps.find((s) => s.id === "carte"); if (step) step.status = "done";
       const next = project.steps.find((s) => s.id === "brief"); if (next && next.status === "pending") next.status = "active";
+      if (next) project.activeStepId = next.id;
       toast("Carte musicale verrouillée.");
     }
     touch(project); persist(); render();
@@ -590,7 +748,6 @@ function bindCockpit(project) {
     if (!project.decision.locked) return;
     toast("Animatique : module V2.5, pas encore branché dans cette tranche.");
   });
-  document.getElementById("playBtn")?.addEventListener("click", () => toast("Lecture audio réelle : branchée à l'étape Audio verrouillé (V1)."));
 }
 
 function bindSourcesStep(project) {
@@ -626,6 +783,7 @@ function bindSourcesStep(project) {
     project.sourcesLocked = true;
     const step = project.steps.find((s) => s.id === "sources"); if (step) step.status = "done";
     const next = project.steps.find((s) => s.id === "audio"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
     touch(project); persist(); render();
     toast("Inventaire verrouillé — l'audio devient la prochaine étape.");
   });
@@ -633,6 +791,52 @@ function bindSourcesStep(project) {
     project.sourcesLocked = false;
     const step = project.steps.find((s) => s.id === "sources"); if (step) step.status = "active";
     const next = project.steps.find((s) => s.id === "audio"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindAudioStep(project) {
+  const analyzeBtn = document.getElementById("analyzeBtn");
+  if (analyzeBtn) analyzeBtn.addEventListener("click", async () => {
+    const audioSrc = project.sources.find((s) => s.category === "audio");
+    if (!audioSrc) return;
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = "Analyse en cours…";
+    try {
+      const blob = await AiXelDB.getBlob(audioSrc.id);
+      if (!blob) throw new Error("Fichier introuvable localement.");
+      const result = await AiXelAudio.analyze(blob);
+      project.audio = {
+        sourceId: audioSrc.id,
+        file: audioSrc.name,
+        duration: result.duration,
+        bpm: result.bpm,
+        peak: result.peak,
+        profile: profileFromEnergy(result.averageEnergy),
+        waveform: result.waveform,
+      };
+      project.structure = result.sections;
+      touch(project); persist(); render();
+      toast("Analyse terminée.");
+    } catch (err) {
+      console.error(err);
+      toast(err.message || "Échec de l'analyse audio.");
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = "Lancer l'analyse locale →";
+    }
+  });
+  document.getElementById("lockAudio")?.addEventListener("click", () => {
+    project.audioLocked = true;
+    const step = project.steps.find((s) => s.id === "audio"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "carte"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Audio verrouillé.");
+  });
+  document.getElementById("reopenAudio")?.addEventListener("click", () => {
+    project.audioLocked = false;
+    const step = project.steps.find((s) => s.id === "audio"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "carte"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
 }
