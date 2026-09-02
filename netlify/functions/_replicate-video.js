@@ -36,37 +36,30 @@ function requireToken() {
   return token;
 }
 
-// Correctif du 2026-09-02 : l'URL Replicate renvoyée par une prédiction réussie n'envoie PAS
-// d'en-têtes CORS permissifs — un `fetch()` direct depuis le navigateur échoue silencieusement
-// ("Failed to fetch", aucun détail exploitable), confirmé en le testant en direct depuis le site
-// déployé. Un `<video>`/`<img>` peut charger cette URL sans CORS, mais pas `fetch()`, qui est ce
-// dont on a besoin pour récupérer les octets et les stocker dans IndexedDB. On rapatrie donc la
-// vidéo en base64 CÔTÉ SERVEUR (même principe que le connecteur image, §V3, où ça fonctionne de
-// façon fiable depuis le début) plutôt que de renvoyer l'URL nue au client. Testé en direct le
-// 2026-09-02 : une vidéo 480p de ~5s pèse en réalité un peu plus que prévu une fois encodée en
-// base64 (le premier seuil de sécurité à 4,5 Mo — copié du seuil côté image d'entrée, bien plus
-// légère — s'est révélé trop bas et a rejeté une vidéo par ailleurs valide). Relevé à 5,5 Mo, en
-// gardant une marge sous la limite de réponse synchrone des fonctions Netlify (~6 Mo, JSON+en-têtes
-// inclus) plutôt que de risquer une réponse tronquée.
-async function fetchVideoAsBase64(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
-  const buf = Buffer.from(await res.arrayBuffer());
-  const base64 = buf.toString("base64");
-  if (base64.length > 5.5 * 1024 * 1024) {
-    const mb = (buf.length / (1024 * 1024)).toFixed(1);
-    throw new Error(`La vidéo générée (${mb} Mo) est trop volumineuse pour être rapatriée automatiquement — réessaie, ou signale-le si ça se reproduit souvent.`);
-  }
-  const mime = res.headers.get("content-type") || "video/mp4";
-  return { videoBase64: base64, mime };
+// Correctif du 2026-09-02, tentative 1 (abandonnée) : l'URL Replicate renvoyée par une prédiction
+// réussie n'envoie pas d'en-têtes CORS permissifs — un `fetch()` direct depuis le navigateur
+// échoue silencieusement ("Failed to fetch"), confirmé en le testant en direct. Un premier
+// correctif rapatriait la vidéo en base64 CÔTÉ SERVEUR (comme pour les images, §V3), mais la
+// taille d'une vidéo dépasse parfois la limite de réponse synchrone des fonctions Netlify (~6 Mo)
+// selon la scène — pas un cas rare, une vraie génération réelle l'a déclenché.
+//
+// Correctif du 2026-09-02, définitif : réécriture proxy dans netlify.toml
+// (`/video-proxy/* → https://replicate.delivery/:splat`, status 200). Le CDN Netlify lui-même
+// relaie l'octet-stream — même origine pour le navigateur (donc pas de CORS), aucune fonction
+// Lambda dans la boucle (donc pas de plafond de 6 Mo). On transforme donc simplement l'URL
+// Replicate en chemin relatif vers ce proxy plutôt que de rapatrier quoi que ce soit ici.
+function toProxiedVideoUrl(replicateUrl) {
+  const marker = "replicate.delivery/";
+  const idx = replicateUrl.indexOf(marker);
+  if (idx === -1) return replicateUrl; // filet de sécurité si jamais le domaine change un jour
+  return "/video-proxy/" + replicateUrl.slice(idx + marker.length);
 }
 
-async function normalizeSucceeded(prediction) {
+function normalizeSucceeded(prediction) {
   const output = prediction.output;
   const url = Array.isArray(output) ? output[0] : output;
   if (!url) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
-  const { videoBase64, mime } = await fetchVideoAsBase64(url);
-  return { status: "succeeded", videoBase64, mime, cost: FIXED_COST_USD_480P, id: prediction.id };
+  return { status: "succeeded", videoUrl: toProxiedVideoUrl(url), cost: FIXED_COST_USD_480P, id: prediction.id };
 }
 
 function normalizePending(prediction) {
@@ -77,4 +70,4 @@ function normalizeFailed(prediction) {
   return { status: "failed", error: (prediction && prediction.error) || "Génération vidéo échouée côté fournisseur." };
 }
 
-module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD_480P, requireToken, fetchVideoAsBase64, normalizeSucceeded, normalizePending, normalizeFailed };
+module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD_480P, requireToken, toProxiedVideoUrl, normalizeSucceeded, normalizePending, normalizeFailed };

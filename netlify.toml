@@ -4,6 +4,21 @@
 [functions]
   directory = "netlify/functions"
 
+# Correctif du 2026-09-02 (V3.5, vidéos Production) : les URLs de livraison Replicate
+# (replicate.delivery) n'envoient pas d'en-têtes CORS permissifs, donc un fetch() direct depuis le
+# navigateur échoue ("Failed to fetch") — un <video src> charge sans problème, mais pas de quoi
+# récupérer les octets pour les stocker dans IndexedDB. Rapatrier la vidéo en base64 via une
+# fonction Netlify (comme pour les images, §V3) se heurte à la limite de réponse synchrone des
+# fonctions (~6 Mo) : une vidéo de quelques secondes en 480p peut dépasser ce seuil selon la scène,
+# ce n'est pas un cas rare. Cette réécriture proxy fait porter le transfert par le CDN Netlify
+# lui-même (même origine pour le navigateur, donc pas de CORS ; pas de fonction Lambda dans la
+# boucle, donc pas de plafond de 6 Mo) plutôt que par du code applicatif.
+[[redirects]]
+  from = "/video-proxy/*"
+  to = "https://replicate.delivery/:splat"
+  status = 200
+  force = true
+
 # Le cockpit (index.html/app.js/styles.css) reste un site 100% statique, sans étape de build,
 # décisions en localStorage — inchangé depuis V0.
 #
