@@ -159,17 +159,19 @@ a{color:inherit}
 .library-head{margin-bottom:26px}
 .library-head h1{font-size:32px;margin:22px 0 6px;font-weight:700;letter-spacing:-.5px}
 .library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
-.project-card{text-align:left;background:var(--panel-2);border:1px solid var(--stroke);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+.project-card{position:relative;text-align:left;background:var(--panel-2);border:1px solid var(--stroke);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px;min-height:120px;cursor:pointer}
 .project-card:hover{border-color:rgba(63,214,245,.4)}
 .project-card.new-card{align-items:center;justify-content:center;gap:8px;border-style:dashed;color:var(--muted)}
 .project-card.new-card .plus{font-size:26px;color:var(--cyan)}
-.pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding-right:22px}
 .pc-top b{font-size:15px}
 .pc-pct{color:var(--cyan);font:12px "IBM Plex Mono"}
 .pc-artist{color:var(--muted);font-size:12px}
 .pc-meta{color:var(--faint);font-size:10.5px;margin-top:4px}
+.pc-delete{position:absolute;top:12px;right:12px;width:22px;height:22px;border-radius:7px;background:transparent;border:1px solid transparent;color:var(--faint);font-size:12px;line-height:1;display:grid;place-items:center}
+.pc-delete:hover{background:rgba(242,113,111,.14);border-color:rgba(242,113,111,.35);color:var(--red)}
 
-/* ---------- Modale nouveau projet ---------- */
+/* ---------- Modale nouveau projet / confirmation ---------- */
 .modal-backdrop{position:fixed;inset:0;background:rgba(4,5,9,.72);display:grid;place-items:center;z-index:50;padding:20px}
 .modal{background:var(--panel-2);border:1px solid var(--stroke-2);border-radius:18px;padding:22px;width:100%;max-width:380px;box-shadow:var(--shadow)}
 .modal h2{margin:0 0 16px;font-size:18px}
@@ -178,6 +180,8 @@ a{color:inherit}
 .modal label input:focus{outline:none;border-color:var(--cyan)}
 .modal-hint{color:var(--faint);font-size:11px;line-height:1.5;margin:2px 0 16px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px}
+.btn.danger{background:rgba(242,113,111,.14);border-color:rgba(242,113,111,.4);color:var(--red)}
+.btn.danger:hover{background:rgba(242,113,111,.22)}
 
 /* ---------- Sélecteur de projet (sidebar) ---------- */
 .project-select{position:relative}
@@ -187,6 +191,10 @@ a{color:inherit}
 .pm-item.current{color:var(--cyan);font-weight:650}
 .pm-item.pm-new{color:var(--gold);border-top:1px solid var(--stroke);margin-top:4px;padding-top:9px}
 .pm-item.pm-home{color:var(--muted)}
+.pm-row{display:flex;align-items:center;gap:2px}
+.pm-row .pm-item{flex:1;min-width:0}
+.pm-delete{flex:0 0 auto;width:22px;height:22px;border-radius:7px;background:transparent;border:0;color:var(--faint);font-size:11px;display:grid;place-items:center}
+.pm-delete:hover{background:rgba(242,113,111,.14);color:var(--red)}
 
 /* ---------- Étape Sources ---------- */
 .status-chip.chip-pending{color:var(--amber);background:rgba(242,179,92,.12);border-color:rgba(242,179,92,.3)}

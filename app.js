@@ -439,7 +439,7 @@ function defaultState() {
   // projets migrés depuis une session existante — sinon Histoire/Storyboard/Images/Animatique
   // plantent au premier chargement d'un nouveau navigateur.
   const demo = migrateProject(demoProjectRecord());
-  return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
+  return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
 }
 
 let state = load();
@@ -450,7 +450,7 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const merged = { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
+      const merged = { ...defaultState(), ...parsed, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
       Object.values(merged.projects).forEach(migrateProject);
       return merged;
     }
@@ -459,7 +459,7 @@ function load() {
     if (old) {
       const parsedOld = JSON.parse(old);
       const demo = migrateProject({ ...demoProjectRecord(), ...parsedOld, sources: demoProjectRecord().sources, sourcesLocked: true });
-      return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
+      return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "", confirmDeleteId: null } };
     }
     return defaultState();
   } catch {
@@ -522,26 +522,80 @@ function renderLibrary() {
           <b>Nouveau projet</b>
         </button>
         ${list.map((p) => `
-          <button class="project-card" data-open="${p.id}">
+          <div class="project-card" data-open="${p.id}" role="button" tabindex="0">
+            <button class="pc-delete" data-delete="${p.id}" title="Supprimer le projet" aria-label="Supprimer le projet">✕</button>
             <div class="pc-top"><b>${escapeHtml(p.name)}</b><span class="pc-pct">${progressPct(p)}%</span></div>
             <div class="pc-artist">${escapeHtml(p.artist || "—")}</div>
             <div class="process-bar"><i style="width:${progressPct(p)}%"></i></div>
             <div class="pc-meta">${p.sources.length} source${p.sources.length > 1 ? "s" : ""} · mis à jour ${fmtRelative(p.updatedAt)}</div>
-          </button>
+          </div>
         `).join("")}
       </div>
     </div>
     ${state.ui.newProjectOpen ? renderNewProjectModal() : ""}
+    ${state.ui.confirmDeleteId ? renderDeleteProjectModal() : ""}
   `;
 }
 
 function bindLibrary() {
   const nc = document.getElementById("newProjectCard");
   if (nc) nc.addEventListener("click", () => { state.ui.newProjectOpen = true; render(); });
-  document.querySelectorAll("[data-open]").forEach((el) => {
-    el.addEventListener("click", () => { state.currentProjectId = el.dataset.open; persist(); render(); });
+  document.querySelectorAll(".project-card[data-open]").forEach((el) => {
+    const open = () => { state.currentProjectId = el.dataset.open; persist(); render(); };
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  });
+  document.querySelectorAll("[data-delete]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.ui.confirmDeleteId = el.dataset.delete;
+      render();
+    });
   });
   bindNewProjectModal();
+  bindDeleteProjectModal();
+}
+
+function renderDeleteProjectModal() {
+  const p = state.projects[state.ui.confirmDeleteId];
+  if (!p) return "";
+  return `
+    <div class="modal-backdrop" id="deleteBackdrop">
+      <div class="modal">
+        <h2>Supprimer « ${escapeHtml(p.name)} » ?</h2>
+        <p class="modal-hint">Action définitive : toutes les sources importées (audio, images, textes) et toute la progression de ce projet seront effacées de cet appareil. Impossible à annuler.</p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="deleteCancel">Annuler</button>
+          <button class="btn danger" id="deleteConfirm">Supprimer définitivement</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+function bindDeleteProjectModal() {
+  const backdrop = document.getElementById("deleteBackdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) { state.ui.confirmDeleteId = null; render(); } });
+  document.getElementById("deleteCancel").addEventListener("click", () => { state.ui.confirmDeleteId = null; render(); });
+  document.getElementById("deleteConfirm").addEventListener("click", async () => {
+    const id = state.ui.confirmDeleteId;
+    await deleteProjectCompletely(id);
+    state.ui.confirmDeleteId = null;
+    persist();
+    render();
+    toast("Projet supprimé.");
+  });
+}
+
+async function deleteProjectCompletely(projectId) {
+  const p = state.projects[projectId];
+  if (!p) return;
+  for (const s of p.sources) {
+    try { await AiXelDB.deleteBlob(s.id); } catch {}
+    if (imageUrlCache.has(s.id)) { URL.revokeObjectURL(imageUrlCache.get(s.id)); imageUrlCache.delete(s.id); }
+  }
+  delete state.projects[projectId];
+  if (state.currentProjectId === projectId) state.currentProjectId = null;
 }
 
 function renderNewProjectModal() {
@@ -629,10 +683,16 @@ function renderProjectMenu() {
   const list = Object.values(state.projects).sort((a, b) => b.updatedAt - a.updatedAt);
   return `
     <div class="project-menu">
-      ${list.map((p) => `<button class="pm-item ${p.id === state.currentProjectId ? "current" : ""}" data-switch="${p.id}">${escapeHtml(p.name)}</button>`).join("")}
+      ${list.map((p) => `
+        <div class="pm-row">
+          <button class="pm-item ${p.id === state.currentProjectId ? "current" : ""}" data-switch="${p.id}">${escapeHtml(p.name)}</button>
+          <button class="pm-delete" data-delete="${p.id}" title="Supprimer le projet" aria-label="Supprimer le projet">✕</button>
+        </div>
+      `).join("")}
       <button class="pm-item pm-new" data-newproject="1">+ Nouveau projet</button>
       <button class="pm-item pm-home" data-home="1">🏠 Bibliothèque</button>
     </div>
+    ${state.ui.confirmDeleteId ? renderDeleteProjectModal() : ""}
   `;
 }
 
@@ -1644,12 +1704,18 @@ function bindCockpit(project) {
   document.querySelectorAll("[data-switch]").forEach((el) => el.addEventListener("click", () => { state.currentProjectId = el.dataset.switch; state.ui.projectMenuOpen = false; persist(); render(); }));
   document.querySelector("[data-newproject]")?.addEventListener("click", () => { state.ui.projectMenuOpen = false; state.ui.newProjectOpen = true; render(); });
   document.querySelector("[data-home]")?.addEventListener("click", () => { state.ui.projectMenuOpen = false; state.currentProjectId = null; persist(); render(); });
+  document.querySelectorAll("[data-delete]").forEach((el) => el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.ui.confirmDeleteId = el.dataset.delete;
+    render();
+  }));
 
   document.querySelectorAll(".step").forEach((el) => el.addEventListener("click", () => {
     project.activeStepId = el.dataset.step; persist(); render();
   }));
 
   bindNewProjectModal();
+  bindDeleteProjectModal();
   bindSourcesStep(project);
   bindAudioStep(project);
   bindBriefStep(project);
