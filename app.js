@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V1.5 · 2026-09-02 (brief créatif, bibles visuelles)";
+const BUILD = "V2 · 2026-09-02 (histoire, storyboard)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -70,6 +70,19 @@ const CANON_CATEGORIES = {
   personnage: "Personnage", tenue: "Tenue", objet: "Objet", vehicule: "Véhicule",
   lieu: "Lieu", palette: "Palette", style: "Style",
 };
+
+// Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
+// (l'exemple du document : intro Visual Melody, couplet narratif, refrain performance, pont poétique,
+// final hybride). Une PROPOSITION locale, pas une génération IA — à corriger comme tout le reste.
+function guessDirectionForSection(label, fallback) {
+  const l = (label || "").toLowerCase();
+  if (l.startsWith("intro")) return "visualmelody";
+  if (l.startsWith("refrain")) return "performance";
+  if (l.startsWith("pont")) return "poesie";
+  if (l.startsWith("final")) return "recit";
+  if (l.startsWith("couplet")) return "recit";
+  return fallback;
+}
 
 const STRUCTURE = [
   { id: "intro", label: "Intro", tag: "Installation", start: 0, energy: 32, dur: 17 },
@@ -146,6 +159,66 @@ function defaultBrief() {
 function tagsToText(arr) { return (arr || []).join(", "); }
 function textToTags(s) { return (s || "").split(",").map((x) => x.trim()).filter(Boolean); }
 
+function defaultStory() {
+  return { arc: "", motifs: [], sectionApproach: [], locked: false, lockedAt: null };
+}
+function defaultStoryboard() {
+  return { shots: [], locked: false, lockedAt: null };
+}
+
+// Propose un arc et une approche par section (§8.6) — à partir du brief et de la carte musicale
+// déjà verrouillés. Reste éditable en tout point ; rien n'est jamais imposé.
+function proposeStory(project) {
+  const b = project.brief;
+  const dirName = (DIRECTIONS.find((d) => d.id === b.direction) || {}).name || "";
+  const sectionApproach = (project.structure || []).map((s) => ({
+    sectionId: s.id,
+    label: s.label,
+    direction: b.direction === "hybride" ? guessDirectionForSection(s.label, "recit") : (b.direction || "recit"),
+  }));
+  const shortDesc = b.description.length > 140 ? b.description.slice(0, 140) + "…" : b.description;
+  const arc = `Proposition à corriger — à partir de « ${shortDesc} », une progression en ${(project.structure || []).length || "quelques"} temps, direction ${dirName || "à choisir"}.`;
+  return { arc, motifs: textToTags(b.fields.motifs), sectionApproach };
+}
+
+// Storyboard (§8.7 Storyboard Engine) — découpe chaque section en plans au rythme de son énergie
+// (mêmes seuils que la logique éditoriale déjà utilisée dans la carte musicale démo : plans plus
+// courts sur les passages énergiques). Une proposition de structure, pas de prompts finis.
+function proposeShots(project) {
+  const shots = [];
+  (project.structure || []).forEach((s) => {
+    const dur = s.dur != null ? s.dur : Math.max(0, (s.end ?? s.start) - s.start);
+    const approach = (project.story.sectionApproach || []).find((a) => a.sectionId === s.id);
+    const isHigh = (s.energy || 0) >= 65;
+    const targetShotLength = isHigh ? 3 : 4.5;
+    const count = Math.max(1, Math.round(dur / targetShotLength) || 1);
+    const shotDur = dur / count;
+    for (let i = 0; i < count; i++) {
+      shots.push({
+        id: uid(),
+        sectionId: s.id,
+        sectionLabel: s.label,
+        start: s.start + i * shotDur,
+        dur: shotDur,
+        direction: approach ? approach.direction : (project.brief.direction || "recit"),
+        action: "", decor: "", camera: "", emotion: "",
+        references: [], prompt: "",
+        status: "proposé",
+      });
+    }
+  });
+  return shots;
+}
+
+function groupShotsBySection(project) {
+  const bySection = new Map();
+  project.storyboard.shots.forEach((sh) => {
+    if (!bySection.has(sh.sectionId)) bySection.set(sh.sectionId, []);
+    bySection.get(sh.sectionId).push(sh);
+  });
+  return (project.structure || []).map((s) => [s.id, bySection.get(s.id) || []]).filter(([, shots]) => shots.length);
+}
+
 function newProjectRecord(name, artist) {
   const now = Date.now();
   return {
@@ -166,16 +239,20 @@ function newProjectRecord(name, artist) {
     brief: defaultBrief(),
     canon: [],
     canonLocked: false,
+    story: defaultStory(),
+    storyboard: defaultStoryboard(),
     creditsAvoided: 0,
   };
 }
 
-// Rétrocompatibilité : les projets créés avant V1.5 (ex. sur le navigateur d'Axel) n'ont pas
-// encore brief/canon en mémoire locale — on les complète sans toucher au reste.
+// Rétrocompatibilité : les projets créés avant V1.5/V2 (ex. sur le navigateur d'Axel) n'ont pas
+// encore ces champs en mémoire locale — on les complète sans toucher au reste.
 function migrateProject(p) {
   if (!p.brief) p.brief = defaultBrief();
   if (!p.canon) p.canon = [];
   if (p.canonLocked == null) p.canonLocked = false;
+  if (!p.story) p.story = defaultStory();
+  if (!p.storyboard) p.storyboard = defaultStoryboard();
   return p;
 }
 
@@ -418,7 +495,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <div class="mark">A</div>
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V1.5"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V2"}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
@@ -464,6 +541,8 @@ function renderMain(project, step) {
   if (step.id === "carte" && project.audio) return `<div class="crumb">${crumb}</div>` + renderCarteMusicale(project);
   if (step.id === "brief") return `<div class="crumb">${crumb}</div>` + renderBriefStep(project);
   if (step.id === "bibles") return `<div class="crumb">${crumb}</div>` + renderBiblesStep(project);
+  if (step.id === "histoire") return `<div class="crumb">${crumb}</div>` + renderHistoireStep(project);
+  if (step.id === "storyboard") return `<div class="crumb">${crumb}</div>` + renderStoryboardStep(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
@@ -670,6 +749,160 @@ function renderCanonCard(c, project, locked) {
           </select>
         </label>
       ` : ""}
+    </div>
+  `;
+}
+
+// ---------- Étape Histoire & motifs (Story Engine) ----------
+
+function renderHistoireStep(project) {
+  const st = project.story;
+  const locked = st.locked;
+  const hasStructure = (project.structure || []).length > 0;
+  const proposed = st.arc.trim().length > 0 || st.sectionApproach.length > 0;
+
+  return `
+    <div class="page-head">
+      <h1>Histoire & motifs</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Direction narrative verrouillée" : proposed ? "Proposition à corriger" : "À proposer"}</span>
+    </div>
+    <p class="page-sub">À partir du brief et de la carte musicale, une proposition d'arc et de motifs — à corriger, jamais à accepter les yeux fermés.</p>
+    ${!project.brief.locked ? `<div class="dup-banner">ℹ️ Le brief créatif n'est pas encore verrouillé — la proposition sera plus solide une fois l'intention fixée.</div>` : ""}
+    ${!hasStructure ? `<div class="dup-banner">ℹ️ Aucune carte musicale pour l'instant — verrouille l'audio et la carte musicale pour une proposition par section.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Histoire verrouillée — référence pour le storyboard.
+      <button class="btn small reopen" id="reopenStory">Rouvrir</button></div>` : ""}
+
+    ${!proposed ? `
+      <div class="card">
+        <div class="analyze-cta">
+          <div class="decision-icon">✎</div>
+          <div><b>Proposer une histoire</b><p class="page-sub" style="margin:4px 0 0">Basé sur ta direction créative, ta description et les sections de la carte musicale.</p></div>
+          <button class="btn primary" id="proposeStoryBtn">Proposer une histoire →</button>
+        </div>
+      </div>
+    ` : `
+      <div class="card">
+        <h2>Arc narratif <span style="font-weight:400;color:var(--faint);font-size:11px">— proposition, à réécrire librement</span></h2>
+        <textarea id="storyArc" class="brief-textarea" rows="4" ${locked ? "disabled" : ""}>${escapeHtml(st.arc)}</textarea>
+      </div>
+      <div class="card">
+        <h2>Motifs récurrents</h2>
+        <input type="text" id="storyMotifs" class="canon-name" value="${escapeAttr(tagsToText(st.motifs))}" placeholder="séparés par des virgules" ${locked ? "disabled" : ""} />
+      </div>
+      ${hasStructure ? `
+      <div class="card">
+        <div class="section-head"><h2>Approche par section</h2><span class="count">${st.sectionApproach.length} section${st.sectionApproach.length > 1 ? "s" : ""}</span></div>
+        <div class="field-grid">
+          ${st.sectionApproach.map((a) => `
+            <label class="field"><span>${escapeHtml(a.label)}</span>
+              <select data-approach="${a.sectionId}" ${locked ? "disabled" : ""}>
+                ${DIRECTIONS.map((d) => `<option value="${d.id}" ${d.id === a.direction ? "selected" : ""}>${d.name}</option>`).join("")}
+              </select>
+            </label>
+          `).join("")}
+        </div>
+      </div>
+      ` : ""}
+      ${!locked ? `<button class="btn ghost" id="reproposeStory" style="margin-bottom:14px">↺ Refaire la proposition</button>` : ""}
+    `}
+
+    ${proposed && !locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller l'histoire</h3>
+          <p>Cette direction narrative devient la référence pour le storyboard.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockStory" ${st.arc.trim() ? "" : "disabled"}>Verrouiller l'histoire →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+// ---------- Étape Storyboard (Storyboard Engine) ----------
+
+function renderStoryboardStep(project) {
+  const sb = project.storyboard;
+  const locked = sb.locked;
+  const hasStructure = (project.structure || []).length > 0;
+
+  if (!hasStructure) {
+    return `
+      <div class="page-head"><h1>Storyboard</h1></div>
+      <p class="page-sub">Aucune carte musicale pour l'instant.</p>
+      <div class="card empty-card"><div class="empty-hint">Verrouille l'audio et la carte musicale pour générer un storyboard minuté.</div></div>
+    `;
+  }
+
+  return `
+    <div class="page-head">
+      <h1>Storyboard</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Storyboard verrouillé" : sb.shots.length ? `${sb.shots.length} plans proposés` : "À générer"}</span>
+    </div>
+    <p class="page-sub">Plans minutés par section musicale — action, décor, caméra, émotion et références à préciser. Le coût réel arrivera avec les connecteurs de génération (V3) ; pour l'instant, seule la structure est proposée.</p>
+    ${!project.canonLocked ? `<div class="dup-banner">ℹ️ Les bibles visuelles ne sont pas encore verrouillées — les références par plan seront disponibles une fois qu'elles le seront.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Storyboard verrouillé — référence pour l'animatique et la production.
+      <button class="btn small reopen" id="reopenStoryboard">Rouvrir</button></div>` : ""}
+
+    ${sb.shots.length === 0 ? `
+      <div class="card">
+        <div class="analyze-cta">
+          <div class="decision-icon">▤</div>
+          <div><b>Générer une proposition de plans</b><p class="page-sub" style="margin:4px 0 0">Découpe chaque section en plans, au rythme de son énergie.</p></div>
+          <button class="btn primary" id="generateShotsBtn">Générer les plans →</button>
+        </div>
+      </div>
+    ` : `
+      ${!locked ? `<button class="btn ghost" id="regenShots" style="margin-bottom:14px">↺ Régénérer les plans</button>` : ""}
+      ${groupShotsBySection(project).map(([, shots]) => `
+        <div class="card">
+          <div class="section-head"><h2>${escapeHtml(shots[0].sectionLabel)}</h2><span class="count">${shots.length} plan${shots.length > 1 ? "s" : ""}</span></div>
+          <div class="shot-list">
+            ${shots.map((sh, i) => renderShotRow(sh, i, project, locked)).join("")}
+          </div>
+        </div>
+      `).join("")}
+    `}
+
+    ${sb.shots.length > 0 && !locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller le storyboard</h3>
+          <p>Ces plans deviennent la référence pour l'animatique et la production.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockStoryboard">Verrouiller le storyboard →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderShotRow(sh, i, project, locked) {
+  const canonOptions = project.canon.filter((c) => c.status === "verrouillé");
+  return `
+    <div class="shot-row">
+      <div class="shot-top">
+        <span>0${i + 1}</span><span>${fmtTime(sh.start)} · ${sh.dur.toFixed(1)}s</span>
+        <select class="canon-category" data-shotdir="${sh.id}" ${locked ? "disabled" : ""}>
+          ${DIRECTIONS.map((d) => `<option value="${d.id}" ${d.id === sh.direction ? "selected" : ""}>${d.name}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-grid">
+        <label class="field"><span>Action</span><input type="text" data-shotaction="${sh.id}" value="${escapeAttr(sh.action)}" ${locked ? "disabled" : ""} /></label>
+        <label class="field"><span>Décor</span><input type="text" data-shotdecor="${sh.id}" value="${escapeAttr(sh.decor)}" ${locked ? "disabled" : ""} /></label>
+        <label class="field"><span>Caméra</span><input type="text" data-shotcamera="${sh.id}" value="${escapeAttr(sh.camera)}" ${locked ? "disabled" : ""} /></label>
+        <label class="field"><span>Émotion</span><input type="text" data-shotemotion="${sh.id}" value="${escapeAttr(sh.emotion)}" ${locked ? "disabled" : ""} /></label>
+      </div>
+      ${canonOptions.length ? `
+        <label class="field"><span>Références (bibles verrouillées)</span>
+          <select multiple data-shotrefs="${sh.id}" ${locked ? "disabled" : ""} style="min-height:64px">
+            ${canonOptions.map((c) => `<option value="${c.id}" ${sh.references.includes(c.id) ? "selected" : ""}>${escapeHtml(c.name || CANON_CATEGORIES[c.category])}</option>`).join("")}
+          </select>
+        </label>
+      ` : ""}
+      <label class="field"><span>Prompt structuré (brouillon)</span><textarea data-shotprompt="${sh.id}" rows="2" ${locked ? "disabled" : ""}>${escapeHtml(sh.prompt)}</textarea></label>
     </div>
   `;
 }
@@ -992,6 +1225,8 @@ function bindCockpit(project) {
   bindAudioStep(project);
   bindBriefStep(project);
   bindBiblesStep(project);
+  bindHistoireStep(project);
+  bindStoryboardStep(project);
 
   if (project.activeStepId === "carte" && project.audio) {
     bindCarteMusicaleAudio(project);
@@ -1204,6 +1439,83 @@ function bindBiblesStep(project) {
     project.canonLocked = false;
     const step = project.steps.find((s) => s.id === "bibles"); if (step) step.status = "active";
     const next = project.steps.find((s) => s.id === "histoire"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindHistoireStep(project) {
+  const st = project.story;
+  document.getElementById("proposeStoryBtn")?.addEventListener("click", () => {
+    Object.assign(st, proposeStory(project));
+    touch(project); persist(); render();
+    toast("Histoire proposée — à corriger librement.");
+  });
+  document.getElementById("reproposeStory")?.addEventListener("click", () => {
+    Object.assign(st, proposeStory(project));
+    touch(project); persist(); render();
+  });
+  const arc = document.getElementById("storyArc");
+  // Re-rend (comme la description du brief) car ce champ conditionne le bouton de verrouillage.
+  if (arc) arc.addEventListener("change", () => { st.arc = arc.value; touch(project); persist(); render(); });
+  const motifs = document.getElementById("storyMotifs");
+  if (motifs) motifs.addEventListener("change", () => { st.motifs = textToTags(motifs.value); touch(project); persist(); });
+  document.querySelectorAll("[data-approach]").forEach((el) => el.addEventListener("change", () => {
+    const a = st.sectionApproach.find((x) => x.sectionId === el.dataset.approach);
+    if (a) { a.direction = el.value; touch(project); persist(); }
+  }));
+  document.getElementById("lockStory")?.addEventListener("click", () => {
+    if (!st.arc.trim()) return;
+    st.locked = true; st.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "histoire"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "storyboard"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Histoire verrouillée.");
+  });
+  document.getElementById("reopenStory")?.addEventListener("click", () => {
+    st.locked = false;
+    const step = project.steps.find((s) => s.id === "histoire"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "storyboard"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindStoryboardStep(project) {
+  const sb = project.storyboard;
+  document.getElementById("generateShotsBtn")?.addEventListener("click", () => {
+    sb.shots = proposeShots(project);
+    touch(project); persist(); render();
+    toast(`${sb.shots.length} plan${sb.shots.length > 1 ? "s" : ""} proposé${sb.shots.length > 1 ? "s" : ""} — à ajuster.`);
+  });
+  document.getElementById("regenShots")?.addEventListener("click", () => {
+    sb.shots = proposeShots(project);
+    touch(project); persist(); render();
+    toast("Plans régénérés.");
+  });
+  const findShot = (id) => sb.shots.find((s) => s.id === id);
+  document.querySelectorAll("[data-shotdir]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotdir); if (s) { s.direction = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotaction]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotaction); if (s) { s.action = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotdecor]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotdecor); if (s) { s.decor = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotcamera]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotcamera); if (s) { s.camera = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotemotion]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotemotion); if (s) { s.emotion = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotprompt]").forEach((el) => el.addEventListener("change", () => { const s = findShot(el.dataset.shotprompt); if (s) { s.prompt = el.value; touch(project); persist(); } }));
+  document.querySelectorAll("[data-shotrefs]").forEach((el) => el.addEventListener("change", () => {
+    const s = findShot(el.dataset.shotrefs);
+    if (s) { s.references = Array.from(el.selectedOptions).map((o) => o.value); touch(project); persist(); }
+  }));
+  document.getElementById("lockStoryboard")?.addEventListener("click", () => {
+    if (!sb.shots.length) return;
+    sb.locked = true; sb.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "storyboard"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "images"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Storyboard verrouillé.");
+  });
+  document.getElementById("reopenStoryboard")?.addEventListener("click", () => {
+    sb.locked = false;
+    const step = project.steps.find((s) => s.id === "storyboard"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "images"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
 }

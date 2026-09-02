@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V1.5)
+# AiXel VideoGenerator — reprise en code source (V0 → V2)
 
 ## Pourquoi cette reconstruction
 
@@ -88,12 +88,34 @@ pas de la génération. Basée directement sur `AiXel_VideoGenerator_Product_Arc
   reçoivent automatiquement un brief et des bibles vides au premier chargement, sans rien perdre de
   leurs sources ou de leur analyse audio.
 
-## Prochaine étape (V2 — Histoire et storyboard)
+## V2 — Histoire et storyboard (fait)
 
-Relier la carte musicale, le brief et les bibles pour proposer une histoire et des motifs adaptés à la
-durée réelle de la chanson, puis un storyboard minuté avec prompts structurés, références par plan et
-estimation des coûts. Toujours pas de génération IA à ce stade — la génération arrivera en V3, avec
-la même architecture "clé API jamais côté client" que pour AiXeLN.
+Toujours 100% local, sans clé IA — les "propositions" ci-dessous sont des heuristiques déterministes
+basées sur les données déjà verrouillées (brief, carte musicale, bibles), pas de la génération.
+Basée sur `AiXel_VideoGenerator_Product_Architecture_1.0.md` (§6, §8.6, §8.7).
+
+- **Histoire & motifs (Story Engine)** : bouton "Proposer une histoire" qui génère un arc narratif
+  (texte à réécrire librement, jamais imposé) et une approche créative par section musicale. Pour la
+  direction "Hybride dirigé", l'approche par section suit l'exemple du document d'architecture :
+  intro → Visual Melody, refrain → performance, pont → poésie, couplets/final → récit — chaque section
+  reste modifiable individuellement. Motifs récurrents pré-remplis depuis le brief structuré,
+  éditables. Verrouillable ; devient la référence pour le storyboard.
+- **Storyboard (Storyboard Engine)** : bouton "Générer les plans" qui découpe chaque section de la
+  carte musicale en plans (plans plus courts sur les passages énergiques, plus longs ailleurs — même
+  logique éditoriale que la carte musicale). Chaque plan a une direction créative, action, décor,
+  caméra, émotion, un brouillon de prompt, et des références tirées des bibles visuelles verrouillées.
+  Le coût par plan reste honnêtement affiché comme "à définir" — aucun chiffre inventé tant qu'aucun
+  connecteur de génération n'est branché (V3). Regroupé par section, verrouillable, réouvrable.
+- **Garde-fous non bloquants** : histoire et storyboard restent accessibles même si le brief ou les
+  bibles ne sont pas encore verrouillés (juste un rappel discret), pour ne jamais bloquer le travail —
+  seule l'absence de carte musicale bloque réellement (rien à découper en plans sans elle).
+
+## Prochaine étape (V2.5 — Image Lab et animatique)
+
+Tests d'images à partir du storyboard, comparaison et validation, puis assemblage d'une animatique
+avec la musique verrouillée, les moteurs Visual Melody et les paroles temporaires. Toujours pas de
+génération IA payante à ce stade (roadmap V3) — la génération arrivera avec la même architecture
+"clé API jamais côté client" que pour AiXeLN.
 
 ## Déployer
 

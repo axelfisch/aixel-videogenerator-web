@@ -246,3 +246,12 @@ a{color:inherit}
 .canon-name:focus{outline:none;border-color:var(--cyan)}
 .canon-desc{background:var(--raised);border:1px solid var(--stroke);border-radius:9px;padding:9px 10px;color:var(--text);font-size:12px;resize:vertical}
 .canon-desc:focus{outline:none;border-color:var(--cyan)}
+
+/* ---------- Étapes Histoire & Storyboard ---------- */
+.shot-list{display:flex;flex-direction:column;gap:14px}
+.shot-row{background:var(--raised);border:1px solid var(--stroke);border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:10px}
+.shot-top{display:flex;align-items:center;gap:10px;font:11px "IBM Plex Mono";color:var(--faint)}
+.shot-top select{margin-left:auto}
+.shot-row textarea{width:100%;background:var(--panel);border:1px solid var(--stroke);border-radius:9px;padding:9px 10px;color:var(--text);font-size:12px;resize:vertical}
+.shot-row textarea:focus{outline:none;border-color:var(--cyan)}
+.shot-row select[multiple]{background:var(--panel);border:1px solid var(--stroke);border-radius:9px;padding:6px;color:var(--text);font-size:12px;width:100%}
