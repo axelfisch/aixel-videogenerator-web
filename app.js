@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V2 · 2026-09-02 (histoire, storyboard)";
+const BUILD = "V2.5 · 2026-09-02 (image lab, animatique)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -70,6 +70,38 @@ const CANON_CATEGORIES = {
   personnage: "Personnage", tenue: "Tenue", objet: "Objet", vehicule: "Véhicule",
   lieu: "Lieu", palette: "Palette", style: "Style",
 };
+
+// Image Lab (§8.8) — cinq dimensions de vérification citées dans le document d'architecture
+// ("identité, composition, accessoires, texte et style"). Vérification manuelle et honnête :
+// aucune détection automatique, juste une checklist pour comparer des variantes déjà importées
+// (pas de génération payante avant V3).
+const IMAGE_CHECKS = [
+  { key: "identite", label: "Identité" },
+  { key: "composition", label: "Composition" },
+  { key: "accessoires", label: "Accessoires" },
+  { key: "texte", label: "Texte" },
+  { key: "style", label: "Style" },
+];
+const IMAGE_CHECK_STATES = ["à vérifier", "conforme", "à corriger"];
+
+function getImageSources(project) {
+  return project.sources.filter((s) => s.category === "image" || s.category === "logo");
+}
+function shotCanonRefs(shot, project) {
+  return (shot.references || []).map((id) => project.canon.find((c) => c.id === id)).filter(Boolean);
+}
+function defaultShotImage(sourceId) {
+  return {
+    id: uid(),
+    sourceId: sourceId || null,
+    addedAt: Date.now(),
+    status: "proposé",
+    checks: Object.fromEntries(IMAGE_CHECKS.map((c) => [c.key, "à vérifier"])),
+    notes: "",
+  };
+}
+function defaultImagelab() { return { locked: false, lockedAt: null }; }
+function defaultAnimatic() { return { locked: false, lockedAt: null }; }
 
 // Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
 // (l'exemple du document : intro Visual Melody, couplet narratif, refrain performance, pont poétique,
@@ -204,6 +236,7 @@ function proposeShots(project) {
         action: "", decor: "", camera: "", emotion: "",
         references: [], prompt: "",
         status: "proposé",
+        images: [], selectedImageId: null,
       });
     }
   });
@@ -241,18 +274,26 @@ function newProjectRecord(name, artist) {
     canonLocked: false,
     story: defaultStory(),
     storyboard: defaultStoryboard(),
+    imagelab: defaultImagelab(),
+    animatic: defaultAnimatic(),
     creditsAvoided: 0,
   };
 }
 
-// Rétrocompatibilité : les projets créés avant V1.5/V2 (ex. sur le navigateur d'Axel) n'ont pas
-// encore ces champs en mémoire locale — on les complète sans toucher au reste.
+// Rétrocompatibilité : les projets créés avant V1.5/V2/V2.5 (ex. sur le navigateur d'Axel) n'ont
+// pas encore ces champs en mémoire locale — on les complète sans toucher au reste.
 function migrateProject(p) {
   if (!p.brief) p.brief = defaultBrief();
   if (!p.canon) p.canon = [];
   if (p.canonLocked == null) p.canonLocked = false;
   if (!p.story) p.story = defaultStory();
   if (!p.storyboard) p.storyboard = defaultStoryboard();
+  if (!p.imagelab) p.imagelab = defaultImagelab();
+  if (!p.animatic) p.animatic = defaultAnimatic();
+  (p.storyboard.shots || []).forEach((sh) => {
+    if (!sh.images) sh.images = [];
+    if (sh.selectedImageId === undefined) sh.selectedImageId = null;
+  });
   return p;
 }
 
@@ -336,7 +377,11 @@ function demoProjectRecord() {
 }
 
 function defaultState() {
-  const demo = demoProjectRecord();
+  // migrateProject() ici aussi : sur un navigateur totalement neuf (aucun localStorage), le projet
+  // démo doit recevoir les mêmes champs par défaut (story/storyboard/imagelab/animatic) que les
+  // projets migrés depuis une session existante — sinon Histoire/Storyboard/Images/Animatique
+  // plantent au premier chargement d'un nouveau navigateur.
+  const demo = migrateProject(demoProjectRecord());
   return { currentProjectId: demo.id, projects: { [demo.id]: demo }, ui: { projectMenuOpen: false, newProjectOpen: false, draftName: "", draftArtist: "" } };
 }
 
@@ -495,7 +540,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <div class="mark">A</div>
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V2"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V2.5"}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
@@ -543,6 +588,8 @@ function renderMain(project, step) {
   if (step.id === "bibles") return `<div class="crumb">${crumb}</div>` + renderBiblesStep(project);
   if (step.id === "histoire") return `<div class="crumb">${crumb}</div>` + renderHistoireStep(project);
   if (step.id === "storyboard") return `<div class="crumb">${crumb}</div>` + renderStoryboardStep(project);
+  if (step.id === "images") return `<div class="crumb">${crumb}</div>` + renderImagesStep(project);
+  if (step.id === "animatique") return `<div class="crumb">${crumb}</div>` + renderAnimatiqueStep(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
@@ -913,6 +960,199 @@ function renderShotRow(sh, i, project, locked) {
   `;
 }
 
+// ---------- Étape Images tests (Image Lab, §8.8) ----------
+// Pas de génération ici (le premier connecteur arrive en V3) : on compare des variantes déjà
+// importées dans les sources, avec une checklist manuelle (identité/composition/accessoires/
+// texte/style, telle que décrite dans le document d'architecture) — jamais une vérification
+// automatique qu'on ne saurait pas garantir.
+
+function renderImagesStep(project) {
+  const shots = project.storyboard.shots;
+  const lab = project.imagelab;
+  const locked = lab.locked;
+  const imgSources = getImageSources(project);
+  const selectedCount = shots.filter((s) => s.selectedImageId).length;
+
+  if (!shots.length) {
+    return `
+      <div class="page-head"><h1>Images tests</h1></div>
+      <p class="page-sub">Aucun plan pour l'instant.</p>
+      <div class="card empty-card"><div class="empty-hint">Génère et verrouille le storyboard pour tester des images par plan.</div></div>
+    `;
+  }
+
+  return `
+    <div class="page-head">
+      <h1>Images tests</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Images verrouillées" : `${selectedCount}/${shots.length} plan${shots.length > 1 ? "s" : ""} avec une image choisie`}</span>
+    </div>
+    <p class="page-sub">Compare des variantes par plan et valide-les avant l'animatique — identité, composition, accessoires, texte, style. Associe des images déjà importées dans les sources ; aucune génération ici (le premier connecteur arrive en V3).</p>
+    ${!project.storyboard.locked ? `<div class="dup-banner">ℹ️ Le storyboard n'est pas encore verrouillé — les plans peuvent encore changer.</div>` : ""}
+    ${!imgSources.length ? `<div class="dup-banner">ℹ️ Aucune image importée pour l'instant — ajoute des images dans Sources pour pouvoir les tester ici.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Images tests verrouillées — référence pour l'animatique.
+      <button class="btn small reopen" id="reopenImages">Rouvrir</button></div>` : ""}
+
+    ${groupShotsBySection(project).map(([, sShots]) => `
+      <div class="card">
+        <div class="section-head"><h2>${escapeHtml(sShots[0].sectionLabel)}</h2><span class="count">${sShots.length} plan${sShots.length > 1 ? "s" : ""}</span></div>
+        <div class="shot-list">
+          ${sShots.map((sh, i) => renderImageShotRow(sh, i, project, locked, imgSources)).join("")}
+        </div>
+      </div>
+    `).join("")}
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller les images tests</h3>
+          <p>Les images choisies deviennent la référence pour l'animatique.${selectedCount === 0 ? " Choisis au moins une image avant de verrouiller." : ""}</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockImages" ${selectedCount ? "" : "disabled"}>Verrouiller les images tests →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderImageShotRow(sh, i, project, locked, imgSources) {
+  const refs = shotCanonRefs(sh, project);
+  const oblig = [...new Set(refs.flatMap((c) => c.obligatoire || []))];
+  const interdit = [...new Set(refs.flatMap((c) => c.interdit || []))];
+  const usedIds = new Set(sh.images.map((im) => im.sourceId));
+  const available = imgSources.filter((s) => !usedIds.has(s.id));
+
+  return `
+    <div class="shot-row">
+      <div class="shot-top">
+        <span>0${i + 1}</span><span>${fmtTime(sh.start)} · ${sh.dur.toFixed(1)}s</span>
+        <span>${escapeHtml(sh.action || "(action à préciser)")}</span>
+      </div>
+      ${(oblig.length || interdit.length) ? `
+        <div class="checklist-hint">
+          ${oblig.length ? `<div><b>Obligatoire :</b> ${escapeHtml(oblig.join(", "))}</div>` : ""}
+          ${interdit.length ? `<div><b>Interdit :</b> ${escapeHtml(interdit.join(", "))}</div>` : ""}
+        </div>
+      ` : ""}
+      <div class="image-grid">
+        ${sh.images.map((im) => renderImageCandidate(im, sh, project, locked)).join("")}
+        ${!locked && available.length ? `
+          <div class="image-add">
+            <select data-imgsrcpick="${sh.id}">
+              ${available.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join("")}
+            </select>
+            <button class="btn small" data-addimage="${sh.id}">+ Ajouter une image test</button>
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderImageCandidate(im, sh, project, locked) {
+  const src = project.sources.find((s) => s.id === im.sourceId);
+  const isSelected = sh.selectedImageId === im.id;
+  return `
+    <div class="image-card ${isSelected ? "selected" : ""}">
+      <div class="src-thumb" data-thumb="${im.sourceId}" style="width:100%;aspect-ratio:16/9;border-radius:0">${imageUrlCache.get(im.sourceId) ? `<img src="${imageUrlCache.get(im.sourceId)}" alt="" />` : ""}</div>
+      <div class="image-card-body">
+        <div class="image-card-name">${escapeHtml(src ? src.name : "Image introuvable")}</div>
+        <select class="canon-category" data-imagestatus="${im.id}" ${locked ? "disabled" : ""}>
+          <option value="proposé" ${im.status === "proposé" ? "selected" : ""}>Proposé</option>
+          <option value="à corriger" ${im.status === "à corriger" ? "selected" : ""}>À corriger</option>
+          <option value="approuvé" ${im.status === "approuvé" ? "selected" : ""}>Approuvé</option>
+        </select>
+        <div class="check-grid">
+          ${IMAGE_CHECKS.map((c) => `
+            <label class="check-item"><span>${c.label}</span>
+              <select data-imagecheck="${im.id}:${c.key}" ${locked ? "disabled" : ""}>
+                ${IMAGE_CHECK_STATES.map((v) => `<option value="${v}" ${im.checks[c.key] === v ? "selected" : ""}>${v}</option>`).join("")}
+              </select>
+            </label>
+          `).join("")}
+        </div>
+        <textarea data-imagenotes="${im.id}" rows="1" placeholder="Notes…" ${locked ? "disabled" : ""}>${escapeHtml(im.notes)}</textarea>
+        ${!locked ? `
+          <div class="image-card-actions">
+            <button class="btn small ${isSelected ? "primary" : ""}" data-selectimage="${sh.id}:${im.id}">${isSelected ? "✓ Choisie" : "Choisir"}</button>
+            <button class="src-del" data-delimage="${sh.id}:${im.id}" aria-label="Retirer">✕</button>
+          </div>
+        ` : isSelected ? `<div class="image-card-actions"><span class="status-chip small">✓ Choisie</span></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Étape Animatique (Animatic Engine, §8.9) ----------
+// Aperçu 100% local : musique verrouillée + images choisies (Image Lab) + un aperçu Visual Melody
+// SIMPLIFIÉ pour les plans dirigés ainsi (pulsation dérivée de la forme d'onde déjà stockée, pas
+// les six moteurs complets de visualmelody.netlify.app) + paroles temporaires en texte brut, non
+// synchronisées. Pas d'export vidéo — juste de quoi juger le rythme avant la production (V3).
+
+function renderAnimatiqueStep(project) {
+  const an = project.animatic;
+  const locked = an.locked;
+  const hasAudio = !!(project.audioLocked && project.audio);
+  const shots = project.storyboard.shots;
+
+  if (!hasAudio || !shots.length) {
+    return `
+      <div class="page-head"><h1>Animatique</h1></div>
+      <p class="page-sub">Il manque encore une brique pour assembler une timeline.</p>
+      <div class="card empty-card"><div class="empty-hint">${!hasAudio ? "Verrouille l'audio (étape Audio verrouillé)" : "Génère et verrouille le storyboard"}${!hasAudio && !shots.length ? ", puis génère et verrouille le storyboard" : ""}.</div></div>
+    `;
+  }
+
+  const lyricsSrc = project.sources.find((s) => s.category === "texte");
+  const preloadIds = [...new Set(shots.map((sh) => (sh.images.find((im) => im.id === sh.selectedImageId) || {}).sourceId).filter(Boolean))];
+
+  return `
+    <div class="page-head">
+      <h1>Animatique</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Animatique verrouillée" : "Aperçu — à valider"}</span>
+    </div>
+    <p class="page-sub">Assemblage local et économique de la musique verrouillée, des images choisies et d'un aperçu Visual Melody simplifié — pas les six moteurs complets de Visual Melody, juste une pulsation dérivée de la forme d'onde. Pas d'export vidéo ici : seulement de quoi juger le rythme avant la production (V3).</p>
+    ${!project.imagelab.locked ? `<div class="dup-banner">ℹ️ Les images tests ne sont pas encore verrouillées — les plans sans image choisie afficheront un repère neutre.</div>` : ""}
+
+    ${locked ? `<div class="locked-banner">🔒 Animatique verrouillée — référence pour la production.
+      <button class="btn small reopen" id="reopenAnimatique">Rouvrir</button></div>` : ""}
+
+    ${preloadIds.map((id) => `<div data-thumb="${id}" hidden></div>`).join("")}
+
+    <div class="card animatic-card">
+      <div class="animatic-stage" id="animStage">
+        <div class="animatic-placeholder" id="animPlaceholder">Clique lecture pour prévisualiser l'animatique.</div>
+        <canvas id="animCanvas" width="640" height="360" style="display:none"></canvas>
+        <img id="animImage" alt="" style="display:none" />
+        <div class="animatic-caption" id="animCaption"></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="play-btn" id="animPlayBtn" aria-label="Lire">▶</button>
+        <div class="audio-meta"><div class="fname">${escapeHtml(project.audio.file)}</div><div class="ftag">ANIMATIQUE · ${shots.length} PLANS</div></div>
+        <div class="audio-time" id="animTimeLabel">${fmtTime(0)} / ${fmtTime(project.audio.duration)}</div>
+      </div>
+      <div class="animatic-timeline" id="animTimeline">
+        ${shots.map((sh, i) => `<i data-animseek="${sh.start}" style="flex:${Math.max(sh.dur, 0.4)}" class="${i % 2 ? "alt" : ""}"></i>`).join("")}
+      </div>
+      ${lyricsSrc ? `
+        <button class="btn ghost" id="toggleLyrics" style="margin-top:12px">Afficher les paroles (non synchronisées)</button>
+        <div class="lyrics-panel" id="lyricsPanel" hidden></div>
+      ` : ""}
+    </div>
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller l'animatique</h3>
+          <p>Le rythme et l'enchaînement des plans deviennent la référence pour la production.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockAnimatique">Verrouiller l'animatique →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
 // ---------- Étape Sources et inventaire ----------
 
 function renderSourcesStep(project) {
@@ -988,6 +1228,7 @@ function renderSourceRow(s, project) {
 
 async function loadThumbnails(project) {
   const targets = document.querySelectorAll("[data-thumb]");
+  let loadedAny = false;
   for (const el of targets) {
     const id = el.dataset.thumb;
     if (imageUrlCache.has(id)) continue;
@@ -997,7 +1238,13 @@ async function loadThumbnails(project) {
       const url = URL.createObjectURL(blob);
       imageUrlCache.set(id, url);
       el.innerHTML = `<img src="${url}" alt="" />`;
+      loadedAny = true;
     } catch {}
+  }
+  // Les vignettes de l'animatique se chargent en arrière-plan (data-thumb caché) — une fois prêtes,
+  // on redessine la scène pour ne pas rester bloqué sur le repère neutre.
+  if (loadedAny && project && project.activeStepId === "animatique" && project.audio) {
+    updateAnimaticStage(project, audioEl && audioElKey === audioKeyFor(project) ? audioEl.currentTime : 0);
   }
 }
 
@@ -1084,8 +1331,8 @@ function audioKeyFor(project) {
 
 function stopAudioPlaybackIfStale(project) {
   const key = project ? audioKeyFor(project) : null;
-  const wantsCarte = project && project.activeStepId === "carte" && project.audio;
-  if (audioEl && (!wantsCarte || audioElKey !== key)) audioEl.pause();
+  const wantsPlayback = project && (project.activeStepId === "carte" || project.activeStepId === "animatique") && project.audio;
+  if (audioEl && (!wantsPlayback || audioElKey !== key)) audioEl.pause();
 }
 
 async function loadAudioEl(project) {
@@ -1123,6 +1370,103 @@ function syncAudioUI() {
     const cut = Math.floor(ratio * bars.length);
     for (let i = 0; i < bars.length; i++) bars[i].classList.toggle("played", i < cut);
   }
+
+  const animTimeLabel = document.getElementById("animTimeLabel");
+  const animPlayBtn = document.getElementById("animPlayBtn");
+  if (animTimeLabel) animTimeLabel.textContent = `${fmtTime(audioEl.currentTime || 0)} / ${fmtTime(audioEl.duration || 0)}`;
+  if (animPlayBtn) animPlayBtn.textContent = audioEl.paused ? "▶" : "⏸";
+  if (animTimeLabel || animPlayBtn) updateAnimaticStage(currentProject(), audioEl.currentTime || 0);
+}
+
+// ---------- Animatique : plan courant, pulsation Visual Melody simplifiée, paroles ----------
+
+function currentShotAt(project, t) {
+  const shots = project.storyboard.shots;
+  for (let i = shots.length - 1; i >= 0; i--) {
+    if (t >= shots[i].start) return shots[i];
+  }
+  return shots[0] || null;
+}
+
+function updateAnimaticStage(project, t) {
+  if (!project || !project.audio) return;
+  const shot = currentShotAt(project, t);
+  const placeholder = document.getElementById("animPlaceholder");
+  const canvas = document.getElementById("animCanvas");
+  const imgEl = document.getElementById("animImage");
+  const caption = document.getElementById("animCaption");
+  const timeline = document.getElementById("animTimeline");
+  if (!placeholder || !canvas || !imgEl || !caption) return;
+  if (!shot) return;
+
+  const captionBits = [shot.sectionLabel, shot.action || shot.emotion || ""].filter(Boolean);
+  if (shot.direction === "visualmelody") captionBits.push("Visual Melody (aperçu simplifié)");
+  caption.textContent = captionBits.join(" — ");
+  const selImg = shot.images.find((im) => im.id === shot.selectedImageId);
+
+  if (shot.direction === "visualmelody") {
+    placeholder.style.display = "none";
+    canvas.style.display = "block";
+    imgEl.style.display = "none";
+    drawVisualMelodyPulse(project, canvas, t);
+  } else if (selImg && imageUrlCache.get(selImg.sourceId)) {
+    placeholder.style.display = "none";
+    canvas.style.display = "none";
+    imgEl.style.display = "block";
+    const url = imageUrlCache.get(selImg.sourceId);
+    if (imgEl.dataset.cur !== url) { imgEl.src = url; imgEl.dataset.cur = url; }
+  } else {
+    canvas.style.display = "none";
+    imgEl.style.display = "none";
+    placeholder.style.display = "flex";
+    placeholder.textContent = "Aucune image sélectionnée pour ce plan.";
+  }
+
+  if (timeline && project.audio.duration) {
+    const ratio = Math.min(1, Math.max(0, t / project.audio.duration));
+    timeline.style.setProperty("--playhead", `${ratio * 100}%`);
+  }
+}
+
+function drawVisualMelodyPulse(project, canvas, t) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  ctx.fillStyle = "#05070c";
+  ctx.fillRect(0, 0, w, h);
+  const wave = project.audio.waveform && project.audio.waveform.length ? project.audio.waveform : WAVE;
+  const dur = project.audio.duration || 1;
+  const ratio = Math.min(1, Math.max(0, t / dur));
+  const idx = Math.min(wave.length - 1, Math.floor(ratio * wave.length));
+  const level = wave[idx] || 0.3;
+  const cx = w / 2, cy = h / 2;
+  const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, Math.max(w, h) / 2);
+  grad.addColorStop(0, "rgba(63,214,245,.9)");
+  grad.addColorStop(0.5, "rgba(242,111,208,.45)");
+  grad.addColorStop(1, "rgba(5,7,12,0)");
+  ctx.fillStyle = grad;
+  const radius = Math.max(24, 30 + level * (Math.min(w, h) / 2 - 20));
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(232,185,92,.35)";
+  ctx.lineWidth = 1.5;
+  for (let i = 1; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(10, radius - i * 18), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+const lyricsTextCache = new Map();
+async function getLyricsText(source) {
+  if (lyricsTextCache.has(source.id)) return lyricsTextCache.get(source.id);
+  const blob = await AiXelDB.getBlob(source.id);
+  if (!blob) throw new Error("introuvable");
+  const looksPlain = source.mime === "text/plain" || /\.(txt|md)$/i.test(source.name);
+  if (!looksPlain) throw new Error("format non pris en charge");
+  const text = await blob.text();
+  lyricsTextCache.set(source.id, text);
+  return text;
 }
 
 function bindCarteMusicaleAudio(project) {
@@ -1233,9 +1577,13 @@ function bindCockpit(project) {
   bindBiblesStep(project);
   bindHistoireStep(project);
   bindStoryboardStep(project);
+  bindImagesStep(project);
+  bindAnimatiqueStep(project);
 
   if (project.activeStepId === "carte" && project.audio) {
     bindCarteMusicaleAudio(project);
+  }
+  if ((project.activeStepId === "carte" || project.activeStepId === "animatique") && project.audio) {
     syncAudioUI();
   }
 
@@ -1268,7 +1616,8 @@ function bindCockpit(project) {
   });
   document.getElementById("prepBtn")?.addEventListener("click", () => {
     if (!project.decision.locked) return;
-    toast("Animatique : module V2.5, pas encore branché dans cette tranche.");
+    project.activeStepId = "animatique";
+    persist(); render();
   });
 }
 
@@ -1533,6 +1882,116 @@ function bindStoryboardStep(project) {
     const next = project.steps.find((s) => s.id === "images"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
+}
+
+function bindImagesStep(project) {
+  const findShot = (id) => project.storyboard.shots.find((s) => s.id === id);
+  const findImage = (id) => project.storyboard.shots.flatMap((s) => s.images).find((im) => im.id === id);
+
+  document.querySelectorAll("[data-addimage]").forEach((btn) => btn.addEventListener("click", () => {
+    const shotId = btn.dataset.addimage;
+    const sh = findShot(shotId);
+    const select = document.querySelector(`[data-imgsrcpick="${shotId}"]`);
+    if (!sh || !select || !select.value) return;
+    sh.images.push(defaultShotImage(select.value));
+    touch(project); persist(); render();
+  }));
+  document.querySelectorAll("[data-imagestatus]").forEach((el) => el.addEventListener("change", () => {
+    const im = findImage(el.dataset.imagestatus);
+    if (im) { im.status = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-imagecheck]").forEach((el) => el.addEventListener("change", () => {
+    const [imId, key] = el.dataset.imagecheck.split(":");
+    const im = findImage(imId);
+    if (im) { im.checks[key] = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-imagenotes]").forEach((el) => el.addEventListener("change", () => {
+    const im = findImage(el.dataset.imagenotes);
+    if (im) { im.notes = el.value; touch(project); persist(); }
+  }));
+  document.querySelectorAll("[data-selectimage]").forEach((btn) => btn.addEventListener("click", () => {
+    const [shotId, imId] = btn.dataset.selectimage.split(":");
+    const sh = findShot(shotId);
+    if (sh) { sh.selectedImageId = sh.selectedImageId === imId ? null : imId; touch(project); persist(); render(); }
+  }));
+  document.querySelectorAll("[data-delimage]").forEach((btn) => btn.addEventListener("click", () => {
+    const [shotId, imId] = btn.dataset.delimage.split(":");
+    const sh = findShot(shotId);
+    if (sh) {
+      sh.images = sh.images.filter((im) => im.id !== imId);
+      if (sh.selectedImageId === imId) sh.selectedImageId = null;
+      touch(project); persist(); render();
+    }
+  }));
+  document.getElementById("lockImages")?.addEventListener("click", () => {
+    if (!project.storyboard.shots.some((s) => s.selectedImageId)) return;
+    project.imagelab.locked = true; project.imagelab.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "images"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "animatique"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Images tests verrouillées.");
+  });
+  document.getElementById("reopenImages")?.addEventListener("click", () => {
+    project.imagelab.locked = false;
+    const step = project.steps.find((s) => s.id === "images"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "animatique"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+}
+
+function bindAnimatiqueStep(project) {
+  const playBtn = document.getElementById("animPlayBtn");
+  const timeline = document.getElementById("animTimeline");
+  if (playBtn) playBtn.addEventListener("click", async () => {
+    playBtn.disabled = true;
+    try {
+      const el = await loadAudioEl(project);
+      if (!el) { toast("Fichier audio introuvable localement."); return; }
+      if (el.paused) await el.play(); else el.pause();
+    } catch { toast("Lecture impossible."); }
+    playBtn.disabled = false;
+  });
+  if (timeline) timeline.addEventListener("click", async (e) => {
+    const target = e.target.closest("[data-animseek]");
+    if (!target) return;
+    const el = await loadAudioEl(project);
+    if (!el) return;
+    const seekTo = parseFloat(target.dataset.animseek);
+    const setTime = () => { el.currentTime = seekTo; syncAudioUI(); };
+    if (el.readyState >= 1) setTime(); else el.addEventListener("loadedmetadata", setTime, { once: true });
+  });
+  document.getElementById("toggleLyrics")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const panel = document.getElementById("lyricsPanel");
+    if (!panel) return;
+    if (!panel.hidden) { panel.hidden = true; btn.textContent = "Afficher les paroles (non synchronisées)"; return; }
+    const lyricsSrc = project.sources.find((s) => s.category === "texte");
+    if (!lyricsSrc) return;
+    panel.hidden = false;
+    panel.textContent = "Chargement…";
+    btn.textContent = "Masquer les paroles";
+    try {
+      panel.textContent = await getLyricsText(lyricsSrc);
+    } catch {
+      panel.textContent = "Texte introuvable ou format non pris en charge (pdf/docx) — importe une version .txt pour l'afficher ici.";
+    }
+  });
+  document.getElementById("lockAnimatique")?.addEventListener("click", () => {
+    project.animatic.locked = true; project.animatic.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "animatique"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "production"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Animatique verrouillée.");
+  });
+  document.getElementById("reopenAnimatique")?.addEventListener("click", () => {
+    project.animatic.locked = false;
+    const step = project.steps.find((s) => s.id === "animatique"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "production"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+  if (project.audio && project.storyboard.shots.length) updateAnimaticStage(project, 0);
 }
 
 async function handleFiles(project, fileList) {

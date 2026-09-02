@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V2)
+# AiXel VideoGenerator — reprise en code source (V0 → V2.5)
 
 ## Pourquoi cette reconstruction
 
@@ -110,12 +110,42 @@ Basée sur `AiXel_VideoGenerator_Product_Architecture_1.0.md` (§6, §8.6, §8.7
   bibles ne sont pas encore verrouillés (juste un rappel discret), pour ne jamais bloquer le travail —
   seule l'absence de carte musicale bloque réellement (rien à découper en plans sans elle).
 
-## Prochaine étape (V2.5 — Image Lab et animatique)
+## V2.5 — Image Lab et animatique (fait)
 
-Tests d'images à partir du storyboard, comparaison et validation, puis assemblage d'une animatique
-avec la musique verrouillée, les moteurs Visual Melody et les paroles temporaires. Toujours pas de
-génération IA payante à ce stade (roadmap V3) — la génération arrivera avec la même architecture
-"clé API jamais côté client" que pour AiXeLN.
+Toujours 100% local, sans clé IA — aucune génération d'image ici (le premier connecteur arrive en
+V3). Basée sur `AiXel_VideoGenerator_Product_Architecture_1.0.md` (§8.8, §8.9).
+
+- **Images tests (Image Lab)** : par plan, associe une ou plusieurs images déjà importées dans les
+  sources (pas de génération) et compare-les avec une checklist manuelle en cinq dimensions —
+  identité, composition, accessoires, texte, style — telle que décrite dans le document
+  d'architecture. Chaque candidat a un état (proposé/à corriger/approuvé), des notes libres, et un
+  rappel des propriétés obligatoires/interdites tirées des bibles visuelles liées au plan. Une image
+  choisie par plan devient la référence pour l'animatique. Verrouillable/réouvrable comme les autres
+  barrières.
+- **Animatique (Animatic Engine)** : assemblage local et économique — lecture réelle de la musique
+  verrouillée (même moteur que la carte musicale), synchronisée à une scène qui affiche l'image
+  choisie de chaque plan au bon moment, avec une timeline cliquable (segments proportionnels à la
+  durée de chaque plan, code couleur par plan). Pour les plans dirigés "Visual Melody", un aperçu
+  **simplifié** remplace l'image statique — une pulsation dessinée en Canvas 2D à partir de la forme
+  d'onde déjà analysée, honnêtement présentée comme un aperçu et non les six moteurs complets de
+  [visualmelody.netlify.app](https://visualmelody.netlify.app). Si un fichier de paroles `.txt` est
+  importé, un panneau optionnel les affiche en texte brut, explicitement non synchronisées. Pas
+  d'export vidéo à ce stade — uniquement de quoi juger le rythme et l'enchaînement avant la
+  production (V3). Le bouton "Préparer l'animatique →" de la colonne de droite y mène directement dès
+  que la carte musicale est verrouillée.
+- **Garde-fous non bloquants** : Images tests reste accessible dès qu'il y a des plans (même storyboard
+  non verrouillé) ; l'animatique nécessite l'audio verrouillé et des plans, mais pas que les images
+  tests soient verrouillées — les plans sans image affichent honnêtement un repère neutre.
+- **Correctif de fond** : un projet ouvert sur un navigateur totalement neuf (aucun `localStorage`)
+  recevait un projet démo sans les champs `story`/`storyboard` — un oubli de `V1.5`/`V2` qui aurait
+  fait planter Histoire/Storyboard/Images/Animatique à la première visite. Corrigé en passant aussi
+  le projet démo par `migrateProject()` au démarrage.
+
+## Prochaine étape (V3 — Production assistée)
+
+Premier connecteur de génération d'images/vidéo, mais uniquement pour les plans approuvés — jamais
+en masse. Versions, coûts réels et reprise ciblée en cas d'échec, comparaison des variantes. La
+génération arrivera avec la même architecture "clé API jamais côté client" que pour AiXeLN.
 
 ## Déployer
 
