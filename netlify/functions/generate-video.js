@@ -11,11 +11,17 @@ exports.handler = async (event) => {
     return { statusCode: 405, body: JSON.stringify({ error: "Méthode non autorisée." }) };
   }
 
+  // Traces de diagnostic temporaires (2026-09-02) — Axel a rencontré une erreur générique
+  // "(E002)" côté client sans détail exploitable ; ces logs (visibles dans Netlify → Logs &
+  // metrics → Functions) permettent de voir précisément où ça casse avant de retirer ces lignes.
+  console.log(`[generate-video] event.body length: ${(event.body || "").length} octets`);
+
   let body;
-  try { body = JSON.parse(event.body || "{}"); } catch { body = {}; }
+  try { body = JSON.parse(event.body || "{}"); } catch (e) { console.error("[generate-video] JSON.parse(event.body) a échoué:", e.message); body = {}; }
   const prompt = (body.prompt || "").trim();
   const image = body.image;
   const frames = Math.max(5, Math.min(100, parseInt(body.frames, 10) || 81));
+  console.log(`[generate-video] image data URL length: ${image ? image.length : 0} octets, frames: ${frames}, prompt length: ${prompt.length}`);
   if (!image) return { statusCode: 400, body: JSON.stringify({ error: "Image de référence manquante — choisis d'abord une image test pour ce plan." }) };
 
   try {
@@ -32,7 +38,10 @@ exports.handler = async (event) => {
       },
       body: JSON.stringify({ input }),
     });
-    const prediction = await res.json().catch(() => ({}));
+    const rawText = await res.text();
+    console.log(`[generate-video] Replicate a répondu ${res.status} en ${rawText.length} octets: ${rawText.slice(0, 800)}`);
+    let prediction;
+    try { prediction = JSON.parse(rawText); } catch (e) { console.error("[generate-video] Réponse Replicate non-JSON:", e.message); prediction = {}; }
     if (!res.ok) {
       return { statusCode: res.status, body: JSON.stringify({ error: prediction.detail || prediction.error || "Le fournisseur de génération vidéo a refusé la demande." }) };
     }
@@ -45,6 +54,7 @@ exports.handler = async (event) => {
     }
     return { statusCode: 200, body: JSON.stringify({ ...normalizePending(prediction), frames }) };
   } catch (err) {
+    console.error("[generate-video] Exception attrapée:", err && err.stack ? err.stack : err);
     return { statusCode: err.status || 500, body: JSON.stringify({ error: err.message || "Erreur serveur pendant la génération vidéo." }) };
   }
 };
