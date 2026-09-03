@@ -648,7 +648,7 @@ function renderLibrary() {
     <div class="library">
       <div class="library-head">
         <div class="brand">
-          <div class="mark">A</div>
+          <img class="mark" src="logo.png" alt="AiXel Video" />
           <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
         </div>
         <h1>Tes projets</h1>
@@ -787,7 +787,7 @@ function renderLeftRail(project) {
   return `
     <aside class="left-rail">
       <div class="brand">
-        <div class="mark">A</div>
+        <img class="mark" src="logo.png" alt="AiXel Video" />
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
         <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V3"}</span>
       </div>
@@ -2615,7 +2615,17 @@ function bindProductionStep(project) {
         addedAt: Date.now(), generated: true,
       });
       await AiXelDB.putBlob(srcId, blob);
-      sh.videos.push(defaultShotVideo(srcId));
+      const newVideo = defaultShotVideo(srcId);
+      sh.videos.push(newVideo);
+      // Correctif du 2026-09-03 : sur les images tests, comparer plusieurs candidats avant de
+      // choisir est le flux voulu (voir README). Mais Axel a généré ses 42 vidéos une par une, une
+      // seule candidate par plan, en s'attendant à ce que "vidéo générée" = "prête pour la suite" —
+      // et s'est retrouvé bloqué à "Verrouiller la production" (bouton désactivé) faute d'avoir
+      // cliqué "Choisir" séparément sur chacune des 42 vidéos. On sélectionne donc automatiquement
+      // la vidéo tant qu'aucune n'est déjà choisie pour ce plan (premier candidat, ou plus aucun
+      // sélectionné) — un second candidat généré pour comparer ne prend PAS automatiquement la
+      // place du premier, il faut toujours cliquer "Choisir" pour changer d'avis.
+      if (!sh.selectedVideoId) sh.selectedVideoId = newVideo.id;
       project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, prompt, cost, status: "réussi", createdAt: Date.now(), sourceId: srcId });
       touch(project); persist();
       toast("Vidéo générée — ajoutée aux candidats de ce plan.");

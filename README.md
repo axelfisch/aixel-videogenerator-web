@@ -267,6 +267,20 @@ presque toujours en "processing" (JSON propre, bien avant le plafond de 29s), et
 place côté client (`app.js`, toutes les ~3s) prend le relais — vérifié en direct : une fois la vidéo
 prête, le sondage la récupère en moins d'une seconde.
 
+## Correctif (2026-09-03) — "Verrouiller la production" restait désactivé après 42 vidéos générées
+
+Axel a généré ses 42 vidéos avec succès (candidat unique par plan, comme pour la quasi-totalité des
+plans) mais le bouton "Verrouiller la production" restait grisé. Cause : générer une vidéo l'ajoute
+aux *candidats* du plan (`sh.videos`) mais ne la choisit pas — il fallait cliquer "Choisir"
+séparément sur chacune des 42 vidéos (ce geste a du sens quand on compare plusieurs candidats, comme
+prévu pour les images tests, mais devient une corvée à 42 clics quand on ne génère qu'un seul
+candidat par plan, ce qui semble être l'usage réel). Corrigé : une vidéo nouvellement générée est
+désormais choisie automatiquement **tant qu'aucune vidéo n'est déjà choisie pour ce plan** — générer
+un premier candidat le sélectionne directement, générer un second pour comparer NE remplace PAS le
+choix existant (il faut toujours cliquer "Choisir" pour changer d'avis). Testé en Playwright : le
+bouton de verrouillage est actif dès la génération, sans clic supplémentaire ; le bouton "Choisir"
+reste un vrai bascule (choisir/déchoisir) pour qui veut comparer plusieurs candidats.
+
 ## Prochaine étape
 
 Montage/continuité et exports (§8.11+ du document d'architecture) — assembler les vidéos de plans

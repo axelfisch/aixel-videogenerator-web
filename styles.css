@@ -20,7 +20,7 @@ a{color:inherit}
 /* ---------- Left rail ---------- */
 .left-rail{background:var(--panel);border-right:1px solid var(--stroke);padding:18px 14px;display:flex;flex-direction:column;gap:20px}
 .brand{display:flex;align-items:center;gap:10px}
-.brand .mark{width:32px;height:32px;border-radius:9px;background:linear-gradient(145deg,var(--cyan),var(--magenta));display:grid;place-items:center;font-weight:800;color:#05070c;flex:0 0 auto}
+.brand .mark{width:32px;height:32px;border-radius:9px;flex:0 0 auto;object-fit:cover;display:block}
 .brand .lines{line-height:1.2}
 .brand .studio{font-size:9px;letter-spacing:2px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
 .brand .app-name{font-weight:700;font-size:14px}
