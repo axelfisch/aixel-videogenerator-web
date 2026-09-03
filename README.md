@@ -281,6 +281,19 @@ choix existant (il faut toujours cliquer "Choisir" pour changer d'avis). Testé 
 bouton de verrouillage est actif dès la génération, sans clic supplémentaire ; le bouton "Choisir"
 reste un vrai bascule (choisir/déchoisir) pour qui veut comparer plusieurs candidats.
 
+## Correctif (2026-09-03) — aucune vidéo générée n'était téléchargeable
+
+En préparant le générique de fin, constat qu'aucune des 42 vidéos générées n'avait de moyen de
+sortir de l'app — seulement lisibles dans le lecteur intégré (`<video>`), stockées uniquement en
+local (IndexedDB), sans export possible. Un vrai manque, y compris pour un montage fait à la main
+en dehors de l'app en attendant l'étape "Montage & export" (§8.11, toujours pas commencée). Ajouté :
+un bouton "⬇ Télécharger" sur chaque candidat vidéo, qui relit le blob directement depuis IndexedDB
+(fiable même si la vignette de prévisualisation n'a pas fini de charger) et déclenche un
+téléchargement natif du navigateur. Contrairement à "Choisir"/"Retirer" (qui modifient une décision
+et disparaissent une fois le plan verrouillé), le téléchargement reste disponible même après
+verrouillage — télécharger n'est jamais destructif. Testé en Playwright, avant et après
+verrouillage.
+
 ## Prochaine étape
 
 Montage/continuité et exports (§8.11+ du document d'architecture) — assembler les vidéos de plans

@@ -1564,6 +1564,12 @@ function renderVideoCandidate(v, sh, project, locked) {
   const src = project.sources.find((s) => s.id === v.sourceId);
   const isSelected = sh.selectedVideoId === v.id;
   const url = src ? (videoUrlCache.get(v.sourceId) || null) : null;
+  // Correctif du 2026-09-03 : aucune des vidéos générées n'était récupérable hors de l'app (juste
+  // lisible dans le lecteur intégré) — un vrai manque, même pour un montage fait à la main en
+  // dehors de l'app en attendant l'étape Montage & export. Le bouton "⬇" est disponible que le
+  // plan soit verrouillé ou non (contrairement à Choisir/Retirer, qui modifient une décision) —
+  // télécharger n'est jamais destructif.
+  const downloadBtn = src ? `<button class="btn small" data-downloadvideo="${v.sourceId}" title="Télécharger cette vidéo">⬇ Télécharger</button>` : "";
   return `
     <div class="image-card ${isSelected ? "selected" : ""}">
       <div class="image-thumb video-thumb" data-videothumb="${v.sourceId}">${url ? `<video src="${url}" controls preload="metadata"></video>` : `<span class="empty-hint" style="font-size:11px">chargement…</span>`}</div>
@@ -1572,9 +1578,10 @@ function renderVideoCandidate(v, sh, project, locked) {
         ${!locked ? `
           <div class="image-card-actions">
             <button class="btn small ${isSelected ? "primary" : ""}" data-selectvideo="${sh.id}:${v.id}">${isSelected ? "✓ Choisie" : "Choisir"}</button>
+            ${downloadBtn}
             <button class="src-del" data-delvideo="${sh.id}:${v.id}" aria-label="Retirer">✕</button>
           </div>
-        ` : isSelected ? `<div class="image-card-actions"><span class="status-chip small">✓ Choisie</span></div>` : ""}
+        ` : `<div class="image-card-actions">${isSelected ? `<span class="status-chip small">✓ Choisie</span>` : ""}${downloadBtn}</div>`}
       </div>
     </div>
   `;
@@ -2591,6 +2598,29 @@ function bindProductionStep(project) {
       if (sh.selectedVideoId === vId) sh.selectedVideoId = null;
       touch(project); persist(); render();
     }
+  }));
+  // Correctif du 2026-09-03 : téléchargement individuel — relit le blob directement depuis
+  // IndexedDB (plutôt que de dépendre du cache de lecture, pas toujours prêt) pour rester fiable
+  // même si la vignette n'a pas encore fini de charger.
+  document.querySelectorAll("[data-downloadvideo]").forEach((btn) => btn.addEventListener("click", async () => {
+    const sourceId = btn.dataset.downloadvideo;
+    const src = project.sources.find((s) => s.id === sourceId);
+    btn.disabled = true;
+    try {
+      const blob = await AiXelDB.getBlob(sourceId);
+      if (!blob) throw new Error("Vidéo introuvable localement.");
+      const dlUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = dlUrl;
+      a.download = (src && src.name) || `video_${sourceId.slice(0, 6)}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(dlUrl), 4000);
+    } catch (err) {
+      toast(err.message || "Échec du téléchargement.");
+    }
+    btn.disabled = false;
   }));
   document.querySelectorAll("[data-genvideo]").forEach((btn) => btn.addEventListener("click", async () => {
     const shotId = btn.dataset.genvideo;
