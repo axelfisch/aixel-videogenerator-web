@@ -181,6 +181,11 @@ Comparaison des variantes (plusieurs vidéos candidates par plan, comme les imag
 ciblée en cas d'échec, coûts réels journalisés dans `project.videoGenerations` (séparé du journal
 des images tests pour ne jamais mélanger les deux totaux dépensés).
 
+Lorsqu'un projet contient plusieurs pistes audio (voix séparées, musique et master de mixage),
+l'étape Audio permet de choisir explicitement le fichier maître avant l'analyse locale. Le choix
+reste enregistré dans le projet et évite que la première piste importée soit sélectionnée par
+hasard.
+
 - **Fournisseur : Replicate plutôt que TokenRouter**, revenant sur la décision provisoire du
   2026-09-02. TokenRouter reste un compte existant chez Axel et liste bien des modèles vidéo
   (Kling, MiniMax/Hailuo, Wan, HappyHorse), mais son contrat d'API vidéo (endpoint, schéma de

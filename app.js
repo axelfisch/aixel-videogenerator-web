@@ -450,6 +450,7 @@ function newProjectRecord(name, artist) {
     activeStepId: "sources",
     sources: [],
     sourcesLocked: false,
+    audioCandidateId: null,
     audio: null,
     audioLocked: false,
     playedRatio: 0,
@@ -473,6 +474,7 @@ function newProjectRecord(name, artist) {
 // Rétrocompatibilité : les projets créés avant V1.5/V2/V2.5/V3 (ex. sur le navigateur d'Axel)
 // n'ont pas encore ces champs en mémoire locale — on les complète sans toucher au reste.
 function migrateProject(p) {
+  if (p.audioCandidateId === undefined) p.audioCandidateId = null;
   if (!p.brief) p.brief = defaultBrief();
   if (!p.canon) p.canon = [];
   if (p.canonLocked == null) p.canonLocked = false;
@@ -867,7 +869,8 @@ function renderPlaceholder(project, step) {
 // ---------- Étape Audio verrouillé (analyse locale réelle) ----------
 
 function renderAudioStep(project) {
-  const audioSrc = project.sources.find((s) => s.category === "audio");
+  const audioSources = project.sources.filter((s) => s.category === "audio");
+  const audioSrc = audioSources.find((s) => s.id === project.audioCandidateId) || audioSources[0];
   if (!audioSrc) {
     return `
       <div class="page-head"><h1>Audio verrouillé</h1></div>
@@ -878,7 +881,8 @@ function renderAudioStep(project) {
   if (!project.audio) {
     return `
       <div class="page-head"><h1>Audio verrouillé</h1></div>
-      <p class="page-sub">Fichier candidat détecté dans les sources : <b>${escapeHtml(audioSrc.name)}</b> (${fmtBytes(audioSrc.size)}). L'analyse tourne 100% localement dans ton navigateur (forme d'onde, énergie, BPM estimé, proposition de structure) — rien n'est envoyé nulle part.</p>
+      <p class="page-sub">Choisis le fichier qui servira de master. L'analyse tourne 100% localement dans ton navigateur (forme d'onde, énergie, BPM estimé, proposition de structure) — rien n'est envoyé nulle part.</p>
+      ${audioSources.length > 1 ? `<div class="card"><label class="field"><span>Audio maître à analyser</span><select id="audioCandidate">${audioSources.map((s) => `<option value="${s.id}" ${s.id === audioSrc.id ? "selected" : ""}>${escapeHtml(s.name)} · ${fmtBytes(s.size)}</option>`).join("")}</select></label></div>` : ""}
       <div class="card">
         <div class="analyze-cta">
           <div class="decision-icon">♪</div>
@@ -2132,9 +2136,14 @@ function bindSourcesStep(project) {
 }
 
 function bindAudioStep(project) {
+  document.getElementById("audioCandidate")?.addEventListener("change", (e) => {
+    project.audioCandidateId = e.target.value;
+    touch(project); persist(); render();
+  });
   const analyzeBtn = document.getElementById("analyzeBtn");
   if (analyzeBtn) analyzeBtn.addEventListener("click", async () => {
-    const audioSrc = project.sources.find((s) => s.category === "audio");
+    const audioSources = project.sources.filter((s) => s.category === "audio");
+    const audioSrc = audioSources.find((s) => s.id === project.audioCandidateId) || audioSources[0];
     if (!audioSrc) return;
     analyzeBtn.disabled = true;
     analyzeBtn.textContent = "Analyse en cours…";
