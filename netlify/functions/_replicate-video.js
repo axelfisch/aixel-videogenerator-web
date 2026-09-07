@@ -22,7 +22,15 @@ const OUTPUT_FRAMES = 81; // min/défaut du modèle — 81 images à 16 im/s ⇒
 // Tarif Replicate au 2026-09 (à réviser si le fournisseur change ses prix) — prix fixe par vidéo
 // (pas au temps) pour ce modèle : $0,40 en 480p, $1 en 720p (source : page pricing du modèle sur
 // replicate.com/wan-video/wan-2.2-i2v-a14b).
-const FIXED_COST_USD_480P = 0.40;
+const FIXED_COST_USD = { "480p": 0.40, "720p": 1.00 };
+
+function normalizeResolution(value) {
+  return value === "720p" ? "720p" : "480p";
+}
+
+function resolutionForPrediction(prediction, fallback) {
+  return normalizeResolution(prediction && prediction.input && prediction.input.resolution || fallback);
+}
 
 function requireToken() {
   const token = process.env.REPLICATE_API_TOKEN;
@@ -55,11 +63,12 @@ function toProxiedVideoUrl(replicateUrl) {
   return "/video-proxy/" + replicateUrl.slice(idx + marker.length);
 }
 
-function normalizeSucceeded(prediction) {
+function normalizeSucceeded(prediction, fallbackResolution) {
   const output = prediction.output;
   const url = Array.isArray(output) ? output[0] : output;
   if (!url) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
-  return { status: "succeeded", videoUrl: toProxiedVideoUrl(url), cost: FIXED_COST_USD_480P, id: prediction.id };
+  const resolution = resolutionForPrediction(prediction, fallbackResolution);
+  return { status: "succeeded", videoUrl: toProxiedVideoUrl(url), cost: FIXED_COST_USD[resolution], resolution, id: prediction.id };
 }
 
 function normalizePending(prediction) {
@@ -70,4 +79,4 @@ function normalizeFailed(prediction) {
   return { status: "failed", error: (prediction && prediction.error) || "Génération vidéo échouée côté fournisseur." };
 }
 
-module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD_480P, requireToken, toProxiedVideoUrl, normalizeSucceeded, normalizePending, normalizeFailed };
+module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD, normalizeResolution, requireToken, toProxiedVideoUrl, normalizeSucceeded, normalizePending, normalizeFailed };

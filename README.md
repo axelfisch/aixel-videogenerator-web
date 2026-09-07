@@ -189,12 +189,14 @@ des images tests pour ne jamais mélanger les deux totaux dépensés).
   familles de modèles vidéo avec une API prédictions déjà éprouvée dans ce dépôt (§V3) et le jeton
   `REPLICATE_API_TOKEN` déjà configuré chez Axel — aucune nouvelle mise en place. À reconsidérer si
   Axel confirme un jour le format exact de l'API vidéo TokenRouter depuis son tableau de bord.
-- **Modèle** : `wan-video/wan-2.2-i2v-a14b` (image→vidéo, 480p, hébergé par Pruna AI — voir
+- **Modèle** : `wan-video/wan-2.2-i2v-a14b` (image→vidéo, 480p ou 720p, hébergé par Pruna AI — voir
   correctif ci-dessous pour l'historique du choix). Durée de sortie **fixe, non réglable** côté
-  fournisseur — ~5,0625s (81 images à 16 im/s, minimum du modèle) — $0,40/vidéo à tarif fixe (pas
-  au temps) au tarif Replicate de 2026-09 (à réviser si le fournisseur change ses prix). Un plan
-  plus court ou plus long que ~5,1s le signale honnêtement dans l'UI plutôt que de laisser croire
-  que la durée du plan a été respectée.
+  fournisseur — ~5,0625s (81 images à 16 im/s, minimum du modèle). La résolution des prochaines
+  générations se choisit dans Production : **480p à environ $0,40/vidéo** pour les essais ou
+  **720p à environ $1/vidéo** pour le rendu final, aux tarifs Replicate de 2026-09 (à réviser si le
+  fournisseur change ses prix). Le choix est enregistré par projet et chaque tentative conserve
+  sa résolution et son coût dans le journal. Un plan plus court ou plus long que ~5,1s le signale
+  honnêtement dans l'UI plutôt que de laisser croire que la durée du plan a été respectée.
 - **Deux fonctions serveur** (`netlify/functions/generate-video.js` et
   `generate-video-status.js`, connecteur isolé dans `_replicate-video.js`) réutilisent le même
   `REPLICATE_API_TOKEN` que les images tests — aucune variable d'environnement supplémentaire à
