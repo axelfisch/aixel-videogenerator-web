@@ -172,12 +172,15 @@ async function runImageGeneration(prompt, negativePrompt) {
 // modèle), coût fixe et non plus au temps ($0,40/vidéo en 480p, cf. _replicate-video.js).
 const VIDEO_GEN_PROVIDER = {
   id: "replicate-wan2.2-i2v-a14b",
-  label: "Replicate — Wan 2.2 (image→vidéo, 480p)",
-  fixedCostUsd: 0.4, // tarif fixe par vidéo en 480p (à réviser si le fournisseur change ses prix)
+  label: "Replicate — Wan 2.2 (image→vidéo)",
+  costs: { "480p": 0.4, "720p": 1.0 },
   fixedOutputSec: 81 / 16, // 5.0625s — durée fixe (minimum de frames du modèle), non paramétrable
 };
-function videoCostFor() {
-  return VIDEO_GEN_PROVIDER.fixedCostUsd;
+function videoResolutionFor(project) {
+  return project.videoResolution === "720p" ? "720p" : "480p";
+}
+function videoCostFor(project) {
+  return VIDEO_GEN_PROVIDER.costs[videoResolutionFor(project)];
 }
 // Réutilise le même prompt que l'image test choisie (déjà validé visuellement par Axel), sans
 // jamais rien inventer de plus — juste ce qu'il a déjà écrit ailleurs dans le projet. Priorité :
@@ -202,8 +205,8 @@ function blobToDataUrl(blob) {
 // fois encodée en base64 (+33%), et Netlify la rejette AVANT même que notre code ne s'exécute
 // (d'où un message d'erreur générique de la plateforme plutôt qu'une erreur claire du connecteur —
 // bug réel rencontré par Axel le 2026-09-02). On downscale donc toujours l'image côté client avant
-// envoi : Wan 2.1 480p ne tire de toute façon aucun bénéfice d'une image source en haute résolution
-// (sa case d'entrée est plafonnée à 832×480).
+// envoi. On conserve davantage de détails quand le projet demande une sortie 720p, tout en restant
+// sous la limite de taille de la requête Netlify après l'encodage base64.
 async function resizeImageForVideoGen(blob, maxDim = 960, quality = 0.85) {
   const bitmap = await createImageBitmap(blob);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
@@ -228,8 +231,8 @@ async function resizeImageForVideoGen(blob, maxDim = 960, quality = 0.85) {
 // définitive : `videoUrl` est maintenant un chemin relatif vers `/video-proxy/...` (réécriture
 // Netlify, cf. netlify.toml) — même origine pour le navigateur, donc fetch() fonctionne, et c'est
 // le CDN Netlify qui relaie les octets, donc plus de plafond de taille côté fonction.
-async function runVideoGeneration(prompt, imageBlob) {
-  const resized = await resizeImageForVideoGen(imageBlob);
+async function runVideoGeneration(prompt, imageBlob, resolution) {
+  const resized = await resizeImageForVideoGen(imageBlob, resolution === "720p" ? 1280 : 960);
   const imageDataUrl = await blobToDataUrl(resized);
   if (imageDataUrl.length > 4.5 * 1024 * 1024) {
     throw new Error("Image de référence trop volumineuse même après compression — réessaie avec une autre image.");
@@ -237,7 +240,7 @@ async function runVideoGeneration(prompt, imageBlob) {
   const res = await fetch("/.netlify/functions/generate-video", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, image: imageDataUrl }),
+    body: JSON.stringify({ prompt, image: imageDataUrl, resolution }),
   });
   let data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Échec de la génération vidéo (connecteur indisponible).");
@@ -254,7 +257,7 @@ async function runVideoGeneration(prompt, imageBlob) {
   const videoRes = await fetch(data.videoUrl);
   if (!videoRes.ok) throw new Error("Vidéo générée introuvable au moment de la récupérer (lien peut-être expiré) — réessaie.");
   const blob = await videoRes.blob();
-  return { blob, cost: data.cost != null ? data.cost : videoCostFor() };
+  return { blob, cost: data.cost != null ? data.cost : VIDEO_GEN_PROVIDER.costs[resolution], resolution: data.resolution || resolution };
 }
 
 // Histoire (§8.6 Story Engine) — devine une approche par section pour la direction "Hybride dirigé"
@@ -462,6 +465,7 @@ function newProjectRecord(name, artist) {
     production: defaultProduction(),
     generations: [],
     videoGenerations: [],
+    videoResolution: "480p",
     creditsAvoided: 0,
   };
 }
@@ -479,6 +483,7 @@ function migrateProject(p) {
   if (!p.production) p.production = defaultProduction();
   if (!p.generations) p.generations = [];
   if (!p.videoGenerations) p.videoGenerations = [];
+  if (p.videoResolution !== "720p") p.videoResolution = "480p";
   (p.storyboard.shots || []).forEach((sh) => {
     if (!sh.images) sh.images = [];
     if (sh.selectedImageId === undefined) sh.selectedImageId = null;
@@ -1470,6 +1475,8 @@ function renderProductionStep(project) {
   const readyCount = eligible.filter((s) => s.selectedVideoId).length;
   const okGens = project.videoGenerations.filter((g) => g.status === "réussi");
   const genSpend = okGens.reduce((sum, g) => sum + (g.cost || 0), 0);
+  const resolution = videoResolutionFor(project);
+  const generationCost = videoCostFor(project);
 
   if (!shots.length) {
     return `
@@ -1491,7 +1498,8 @@ function renderProductionStep(project) {
       <h1>Production</h1>
       <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Production verrouillée" : `${readyCount}/${eligible.length} plan${eligible.length > 1 ? "s" : ""} avec une vidéo choisie`}</span>
     </div>
-    <p class="page-sub">Génère la vidéo définitive de chaque plan approuvé — jamais en masse, un plan à la fois, sur l'image test déjà choisie. Fournisseur : ${VIDEO_GEN_PROVIDER.label}, ≈ $${VIDEO_GEN_PROVIDER.fixedCostUsd.toFixed(2)}/vidéo (~${VIDEO_GEN_PROVIDER.fixedOutputSec.toFixed(1)}s, durée fixe). Compare des variantes, relance ciblée en cas d'échec — les coûts réels sont journalisés séparément des images tests.</p>
+    <p class="page-sub">Génère la vidéo définitive de chaque plan approuvé — jamais en masse, un plan à la fois, sur l'image test déjà choisie. Fournisseur : ${VIDEO_GEN_PROVIDER.label}, ≈ $${generationCost.toFixed(2)}/vidéo en ${resolution} (~${VIDEO_GEN_PROVIDER.fixedOutputSec.toFixed(1)}s, durée fixe). Compare des variantes, relance ciblée en cas d'échec — les coûts réels sont journalisés séparément des images tests.</p>
+    ${!locked ? `<div class="card"><label class="field"><span>Résolution des prochaines générations</span><select id="videoResolution"><option value="480p" ${resolution === "480p" ? "selected" : ""}>480p — ≈ $0,40 par vidéo · essai économique</option><option value="720p" ${resolution === "720p" ? "selected" : ""}>720p — ≈ $1,00 par vidéo · rendu final</option></select></label><p class="page-sub" style="margin:10px 0 0">Le choix s'applique uniquement aux prochaines générations. Les vidéos déjà créées conservent leur résolution et leur coût.</p></div>` : ""}
     ${okGens.length ? `<p class="gen-summary">🎬 ${okGens.length} vidéo${okGens.length > 1 ? "s" : ""} générée${okGens.length > 1 ? "s" : ""} ce projet · ≈ $${genSpend.toFixed(2)} dépensés</p>` : ""}
     ${eligible.length < shots.length ? `<div class="dup-banner">ℹ️ ${shots.length - eligible.length} plan${shots.length - eligible.length > 1 ? "s n'ont" : " n'a"} pas encore d'image test choisie — ${shots.length - eligible.length > 1 ? "ils restent" : "il reste"} hors production tant que ce n'est pas fait dans Images tests.</div>` : ""}
 
@@ -1544,7 +1552,8 @@ function renderGenVideoPanel(sh, project, refImage) {
   const lastFailed = [...project.videoGenerations].reverse().find((g) => g.shotId === sh.id && g.status === "échoué");
   const outputSec = VIDEO_GEN_PROVIDER.fixedOutputSec;
   const durMismatch = Math.abs(outputSec - sh.dur) > 0.3;
-  const cost = videoCostFor();
+  const resolution = videoResolutionFor(project);
+  const cost = videoCostFor(project);
   return `
     <div class="gen-panel">
       <label class="field"><span>Prompt envoyé à la génération (repris de l'image test choisie, modifiable)</span>
@@ -1553,7 +1562,7 @@ function renderGenVideoPanel(sh, project, refImage) {
       ${durMismatch ? `<div class="gen-error" style="color:var(--text-dim)">⚠ Le fournisseur génère toujours ${outputSec.toFixed(1)}s de vidéo (durée fixe, non réglable) — le plan dure ${sh.dur.toFixed(1)}s. Tu pourras recadrer au montage.</div>` : ""}
       ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
       <div class="gen-row">
-        <span class="gen-cost">≈ $${cost.toFixed(2)} / vidéo (${outputSec.toFixed(1)}s) · ${VIDEO_GEN_PROVIDER.label}</span>
+        <span class="gen-cost">≈ $${cost.toFixed(2)} / vidéo · ${resolution} · ${outputSec.toFixed(1)}s · ${VIDEO_GEN_PROVIDER.label}</span>
         <button class="btn small" data-genvideo="${sh.id}" ${busy || !refImage ? "disabled" : ""}>${busy ? "Génération en cours (peut prendre 1-2 min)…" : "🎬 Générer la vidéo"}</button>
       </div>
     </div>
@@ -2579,6 +2588,11 @@ function bindAnimatiqueStep(project) {
 function bindProductionStep(project) {
   const findShot = (id) => project.storyboard.shots.find((s) => s.id === id);
 
+  document.getElementById("videoResolution")?.addEventListener("change", (e) => {
+    project.videoResolution = e.target.value === "720p" ? "720p" : "480p";
+    touch(project); persist(); render();
+  });
+
   document.querySelectorAll("[data-genvideoprompt]").forEach((el) => el.addEventListener("change", () => {
     const sh = findShot(el.dataset.genvideoprompt);
     if (sh) { sh.genVideoPrompt = el.value; touch(project); persist(); }
@@ -2637,7 +2651,8 @@ function bindProductionStep(project) {
     try {
       const refBlob = await AiXelDB.getBlob(refImage.sourceId);
       if (!refBlob) throw new Error("Image de référence introuvable localement.");
-      const { blob, cost } = await runVideoGeneration(prompt, refBlob);
+      const resolution = videoResolutionFor(project);
+      const { blob, cost } = await runVideoGeneration(prompt, refBlob, resolution);
       const srcId = uid();
       project.sources.push({
         id: srcId, name: `vidéo_${shotId.slice(0, 6)}_${Date.now().toString(36).slice(-4)}.mp4`,
@@ -2656,12 +2671,12 @@ function bindProductionStep(project) {
       // sélectionné) — un second candidat généré pour comparer ne prend PAS automatiquement la
       // place du premier, il faut toujours cliquer "Choisir" pour changer d'avis.
       if (!sh.selectedVideoId) sh.selectedVideoId = newVideo.id;
-      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, prompt, cost, status: "réussi", createdAt: Date.now(), sourceId: srcId });
+      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, resolution, prompt, cost, status: "réussi", createdAt: Date.now(), sourceId: srcId });
       touch(project); persist();
       toast("Vidéo générée — ajoutée aux candidats de ce plan.");
     } catch (err) {
       console.error(err);
-      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, prompt, cost: 0, status: "échoué", error: err.message, createdAt: Date.now() });
+      project.videoGenerations.push({ id: uid(), shotId, provider: VIDEO_GEN_PROVIDER.id, model: VIDEO_GEN_PROVIDER.label, resolution: videoResolutionFor(project), prompt, cost: 0, status: "échoué", error: err.message, createdAt: Date.now() });
       touch(project); persist();
       toast(err.message || "Échec de la génération vidéo.");
     }

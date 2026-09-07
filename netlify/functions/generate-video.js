@@ -19,7 +19,7 @@
 // largement sous le plafond des 29s : la fonction revient presque toujours en "processing" (JSON
 // propre), et le polling déjà en place côté client (app.js, toutes les 3s) prend le relais — vérifié
 // en direct : une fois prête, la vidéo est récupérée par le polling en moins d'une seconde.
-const { MODEL, API_BASE, OUTPUT_FRAMES, FPS, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
+const { MODEL, API_BASE, OUTPUT_FRAMES, FPS, normalizeResolution, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
@@ -30,6 +30,7 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch (e) { body = {}; }
   const prompt = (body.prompt || "").trim();
   const image = body.image;
+  const resolution = normalizeResolution(body.resolution);
   if (!image) return { statusCode: 400, body: JSON.stringify({ error: "Image de référence manquante — choisis d'abord une image test pour ce plan." }) };
 
   try {
@@ -37,8 +38,9 @@ exports.handler = async (event) => {
     // Champs du modèle wan-video/wan-2.2-i2v-a14b (vérifiés le 2026-09-02 sur
     // replicate.com/wan-video/wan-2.2-i2v-a14b/api/schema) : image, prompt, num_frames (81-100),
     // resolution ("480p"/"720p"), frames_per_second (5-24). On reste sur les valeurs par défaut du
-    // modèle (81 images, 480p, 16 im/s) pour une sortie prévisible et au tarif fixe le plus bas.
-    const input = { image, num_frames: OUTPUT_FRAMES, resolution: "480p", frames_per_second: FPS };
+    // modèle (81 images, 16 im/s). La résolution est choisie explicitement dans Production :
+    // 480p pour les essais économiques ou 720p pour les plans finaux.
+    const input = { image, num_frames: OUTPUT_FRAMES, resolution, frames_per_second: FPS };
     if (prompt) input.prompt = prompt;
 
     const res = await fetch(`${API_BASE}/models/${MODEL}/predictions`, {
@@ -58,7 +60,7 @@ exports.handler = async (event) => {
     }
 
     if (prediction.status === "succeeded") {
-      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction)) };
+      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction, resolution)) };
     }
     if (prediction.status === "failed" || prediction.status === "canceled") {
       return { statusCode: 200, body: JSON.stringify(normalizeFailed(prediction)) };
