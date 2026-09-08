@@ -2,7 +2,7 @@
 // Suivi d'une génération vidéo démarrée par generate-video.js quand elle n'a pas fini dans les 25s
 // d'attente initiale (fréquent — une vidéo prend souvent 30s à 2min). Le client interroge cette
 // route toutes les ~3s jusqu'à un état terminal.
-const { API_BASE, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
+const { API_BASE, normalizeResolution, normalizeDialogueDuration, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
 
 exports.handler = async (event) => {
   const q = event.queryStringParameters || {};
@@ -20,7 +20,7 @@ exports.handler = async (event) => {
     }
 
     if (prediction.status === "succeeded") {
-      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction)) };
+      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction, normalizeResolution(q.resolution), normalizeDialogueDuration(q.duration))) };
     }
     if (prediction.status === "failed" || prediction.status === "canceled") {
       return { statusCode: 200, body: JSON.stringify(normalizeFailed(prediction)) };
