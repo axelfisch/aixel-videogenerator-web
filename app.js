@@ -192,7 +192,9 @@ function videoProviderFor(project) {
 }
 function videoOutputSecFor(project, shot) {
   const provider = videoProviderFor(project);
-  return provider.fixedOutputSec || Math.min(15, Math.max(2, Math.round((shot && shot.dur) || provider.defaultOutputSec)));
+  // La vidéo synchronisée ne doit jamais être plus courte que la réplique jointe : on arrondit
+  // donc vers le haut (4,22 s de voix devient un plan de 5 s, jamais 4 s).
+  return provider.fixedOutputSec || Math.min(15, Math.max(2, Math.ceil((shot && shot.dur) || provider.defaultOutputSec)));
 }
 function videoCostFor(project, shot) {
   const provider = videoProviderFor(project);
