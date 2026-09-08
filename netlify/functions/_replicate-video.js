@@ -15,7 +15,10 @@
 // modèle, autre infrastructure d'exécution. À reconsidérer si ce nouveau modèle montre lui aussi
 // des soucis, ou si WaveSpeedAI confirme avoir résolu son incident (auquel cas comparer qualité et
 // coût des deux avant de choisir définitivement).
-const MODEL = "wan-video/wan-2.2-i2v-a14b";
+const MODELS = {
+  legacy: "wan-video/wan-2.2-i2v-a14b",
+  dialogue1080: "wan-video/wan-2.7-i2v",
+};
 const API_BASE = "https://api.replicate.com/v1";
 const FPS = 16;
 const OUTPUT_FRAMES = 81; // min/défaut du modèle — 81 images à 16 im/s ⇒ ~5,0625s de sortie
@@ -23,9 +26,11 @@ const OUTPUT_FRAMES = 81; // min/défaut du modèle — 81 images à 16 im/s ⇒
 // (pas au temps) pour ce modèle : $0,40 en 480p, $1 en 720p (source : page pricing du modèle sur
 // replicate.com/wan-video/wan-2.2-i2v-a14b).
 const FIXED_COST_USD = { "480p": 0.40, "720p": 1.00 };
+// Wan 2.7 I2V : $0,15 / seconde en 1080p (tarif Replicate au 2026-09).
+const DIALOGUE_1080_COST_PER_SEC = 0.15;
 
 function normalizeResolution(value) {
-  return value === "720p" ? "720p" : "480p";
+  return ["480p", "720p", "1080p"].includes(value) ? value : "480p";
 }
 
 function resolutionForPrediction(prediction, fallback) {
@@ -63,12 +68,23 @@ function toProxiedVideoUrl(replicateUrl) {
   return "/video-proxy/" + replicateUrl.slice(idx + marker.length);
 }
 
-function normalizeSucceeded(prediction, fallbackResolution) {
+function normalizeDialogueDuration(value) {
+  const duration = Math.round(Number(value) || 5);
+  return Math.min(15, Math.max(2, duration));
+}
+
+function durationForPrediction(prediction, fallback) {
+  return normalizeDialogueDuration(prediction && prediction.input && prediction.input.duration || fallback);
+}
+
+function normalizeSucceeded(prediction, fallbackResolution, fallbackDuration) {
   const output = prediction.output;
   const url = Array.isArray(output) ? output[0] : output;
   if (!url) throw new Error("La génération a réussi mais n'a renvoyé aucune vidéo.");
   const resolution = resolutionForPrediction(prediction, fallbackResolution);
-  return { status: "succeeded", videoUrl: toProxiedVideoUrl(url), cost: FIXED_COST_USD[resolution], resolution, id: prediction.id };
+  const duration = resolution === "1080p" ? durationForPrediction(prediction, fallbackDuration) : OUTPUT_FRAMES / FPS;
+  const cost = resolution === "1080p" ? DIALOGUE_1080_COST_PER_SEC * duration : FIXED_COST_USD[resolution];
+  return { status: "succeeded", videoUrl: toProxiedVideoUrl(url), cost, resolution, duration, id: prediction.id };
 }
 
 function normalizePending(prediction) {
@@ -79,4 +95,4 @@ function normalizeFailed(prediction) {
   return { status: "failed", error: (prediction && prediction.error) || "Génération vidéo échouée côté fournisseur." };
 }
 
-module.exports = { MODEL, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD, normalizeResolution, requireToken, toProxiedVideoUrl, normalizeSucceeded, normalizePending, normalizeFailed };
+module.exports = { MODELS, API_BASE, FPS, OUTPUT_FRAMES, FIXED_COST_USD, DIALOGUE_1080_COST_PER_SEC, normalizeResolution, normalizeDialogueDuration, requireToken, toProxiedVideoUrl, normalizeSucceeded, normalizePending, normalizeFailed };

@@ -1,4 +1,4 @@
-// POST /.netlify/functions/generate-video  { prompt, image (data URI ou URL) }
+// POST /.netlify/functions/generate-video  { prompt, image (data URI ou URL), resolution, audio?, duration? }
 // Démarre une génération vidéo (Production, §8.10) via Replicate — image→vidéo à partir de l'image
 // test déjà choisie par Axel pour ce plan (jamais en masse : un plan à la fois, image déjà validée).
 // La génération vidéo est nettement plus lente qu'une image test : on attend une réponse rapide
@@ -19,7 +19,7 @@
 // largement sous le plafond des 29s : la fonction revient presque toujours en "processing" (JSON
 // propre), et le polling déjà en place côté client (app.js, toutes les 3s) prend le relais — vérifié
 // en direct : une fois prête, la vidéo est récupérée par le polling en moins d'une seconde.
-const { MODEL, API_BASE, OUTPUT_FRAMES, FPS, normalizeResolution, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
+const { MODELS, API_BASE, OUTPUT_FRAMES, FPS, normalizeResolution, normalizeDialogueDuration, requireToken, normalizeSucceeded, normalizePending, normalizeFailed } = require("./_replicate-video");
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
@@ -31,7 +31,10 @@ exports.handler = async (event) => {
   const prompt = (body.prompt || "").trim();
   const image = body.image;
   const resolution = normalizeResolution(body.resolution);
+  const duration = normalizeDialogueDuration(body.duration);
+  const audio = body.audio;
   if (!image) return { statusCode: 400, body: JSON.stringify({ error: "Image de référence manquante — choisis d'abord une image test pour ce plan." }) };
+  if (resolution === "1080p" && !audio) return { statusCode: 400, body: JSON.stringify({ error: "Une voix est nécessaire pour synchroniser ce plan en 1080p." }) };
 
   try {
     const token = requireToken();
@@ -40,10 +43,16 @@ exports.handler = async (event) => {
     // resolution ("480p"/"720p"), frames_per_second (5-24). On reste sur les valeurs par défaut du
     // modèle (81 images, 16 im/s). La résolution est choisie explicitement dans Production :
     // 480p pour les essais économiques ou 720p pour les plans finaux.
-    const input = { image, num_frames: OUTPUT_FRAMES, resolution, frames_per_second: FPS };
+    // Les plans dialogue utilisent Wan 2.7 : une seule personne à l'image, image de départ,
+    // voix de 2 à 15 s et durée choisie. Ce contrat évite le drift des scènes à deux personnages.
+    const isDialogue1080 = resolution === "1080p";
+    const input = isDialogue1080
+      ? { first_frame: image, audio, resolution: "1080p", duration, enable_prompt_expansion: false }
+      : { image, num_frames: OUTPUT_FRAMES, resolution, frames_per_second: FPS };
     if (prompt) input.prompt = prompt;
+    const model = isDialogue1080 ? MODELS.dialogue1080 : MODELS.legacy;
 
-    const res = await fetch(`${API_BASE}/models/${MODEL}/predictions`, {
+    const res = await fetch(`${API_BASE}/models/${model}/predictions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -60,7 +69,7 @@ exports.handler = async (event) => {
     }
 
     if (prediction.status === "succeeded") {
-      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction, resolution)) };
+      return { statusCode: 200, body: JSON.stringify(await normalizeSucceeded(prediction, resolution, duration)) };
     }
     if (prediction.status === "failed" || prediction.status === "canceled") {
       return { statusCode: 200, body: JSON.stringify(normalizeFailed(prediction)) };
