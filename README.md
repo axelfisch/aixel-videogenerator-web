@@ -1,4 +1,4 @@
-# AiXel VideoGenerator — reprise en code source (V0 → V3)
+# AiXel VideoGenerator — reprise en code source (V0 → V4)
 
 ## Pourquoi cette reconstruction
 
@@ -301,11 +301,22 @@ et disparaissent une fois le plan verrouillé), le téléchargement reste dispon
 verrouillage — télécharger n'est jamais destructif. Testé en Playwright, avant et après
 verrouillage.
 
+## V4 — Montage / continuité & exports (fait)
+
+Assemblage local des vidéos de plans choisies (Production verrouillée) sur la piste audio maître,
+avec alertes de continuité réelles, notes/paroles, verrouillage, puis étape **Qualité & exports** :
+checklist QC + export livrable navigateur (MediaRecorder → WebM 1280×720, audio muxé) stocké dans
+IndexedDB et téléchargeable. Module `montage-export.js`.
+
+**Limites connues (honnêtes)** : export best-effort côté client (Chrome/Edge recommandés) ; pas un
+encodeur pro / pas de EDL ; synchronisation fine des paroles hors scope ; les plans sans vidéo
+choisie sont sautés ; le format de sortie est typiquement WebM (VP8/VP9 + Opus), pas forcément MP4.
+
 ## Prochaine étape
 
-Montage/continuité et exports (§8.11+ du document d'architecture) — assembler les vidéos de plans
-choisies en une timeline continue avec la piste audio verrouillée, contrôle qualité final, export
-du fichier livrable. Pas commencé.
+Peaufiner l'export (MP4 si possible sans build, recadrage précis des plans à durée fournisseur fixe,
+synchronisation paroles) et éventuellement un mode « assemblage hors navigateur » pour les projets
+très longs.
 
 ## Déployer
 
@@ -330,6 +341,7 @@ npx netlify-cli deploy --prod
 - `app.js` — état, rendu, logique (state/render/persist, comme aixeln-lyricsgenerator-web)
 - `db.js` — wrapper IndexedDB (`AiXelDB`) pour le stockage des fichiers binaires
 - `audio-analysis.js` — analyse audio locale (`AiXelAudio`), portée depuis AiXel Visual Melody
+- `montage-export.js` — timeline clips, alertes de continuité, export MediaRecorder (`AiXelMontage`)
 - `netlify.toml` — déploiement statique simple
 
 ## Sources de conception
