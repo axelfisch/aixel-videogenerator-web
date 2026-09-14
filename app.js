@@ -1,7 +1,7 @@
 // AiXel VideoGenerator — cockpit (V0.5 : Nouveau projet + Sources et inventaire)
 // Vanilla JS, sans framework ni étape de build — état + rendu + persistance locale
 // (localStorage pour les métadonnées, IndexedDB pour les fichiers eux-mêmes — voir db.js).
-const BUILD = "V3 · 2026-09-02 (connecteur de génération d'images)";
+const BUILD = "V4 · 2026-09-14 (montage / continuité + exports)";
 const STORAGE_KEY = "aixel-videogenerator:state";
 const OLD_STORAGE_KEY = "aixel-videogenerator:bmw-bnc"; // clé V0, migrée si trouvée
 
@@ -103,6 +103,22 @@ function defaultShotImage(sourceId) {
 function defaultImagelab() { return { locked: false, lockedAt: null }; }
 function defaultAnimatic() { return { locked: false, lockedAt: null }; }
 function defaultProduction() { return { locked: false, lockedAt: null }; }
+function defaultMontage() {
+  return { locked: false, lockedAt: null, lyricsOverlay: true, notes: "", lastExportId: null, lastExportAt: null };
+}
+function defaultQualite() {
+  return {
+    locked: false,
+    lockedAt: null,
+    checks: {
+      continuity: "à vérifier",
+      audioSync: "à vérifier",
+      deliverable: "à vérifier",
+      credits: "à vérifier",
+    },
+    notes: "",
+  };
+}
 function defaultShotVideo(sourceId) {
   return { id: uid(), sourceId: sourceId || null, addedAt: Date.now(), status: "proposé", notes: "" };
 }
@@ -486,6 +502,8 @@ function newProjectRecord(name, artist) {
     imagelab: defaultImagelab(),
     animatic: defaultAnimatic(),
     production: defaultProduction(),
+    montage: defaultMontage(),
+    qualite: defaultQualite(),
     generations: [],
     videoGenerations: [],
     videoResolution: "480p",
@@ -505,6 +523,8 @@ function migrateProject(p) {
   if (!p.imagelab) p.imagelab = defaultImagelab();
   if (!p.animatic) p.animatic = defaultAnimatic();
   if (!p.production) p.production = defaultProduction();
+  if (!p.montage) p.montage = defaultMontage();
+  if (!p.qualite) p.qualite = defaultQualite();
   if (!p.generations) p.generations = [];
   if (!p.videoGenerations) p.videoGenerations = [];
   if (!["480p", "720p", "1080p"].includes(p.videoResolution)) p.videoResolution = "480p";
@@ -515,6 +535,12 @@ function migrateProject(p) {
     if (!sh.videos) sh.videos = [];
     if (sh.selectedVideoId === undefined) sh.selectedVideoId = null;
     if (sh.genVideoPrompt === undefined) sh.genVideoPrompt = null;
+  });
+  // Ajoute montage/qualite (et toute STEP_DEFS manquante) sans écraser les statuts existants.
+  const byId = Object.fromEntries((p.steps || []).map((s) => [s.id, s]));
+  p.steps = STEP_DEFS.map((def) => {
+    const prev = byId[def.id];
+    return { ...def, status: prev && prev.status ? prev.status : "pending" };
   });
   return p;
 }
@@ -875,6 +901,8 @@ function renderMain(project, step) {
   if (step.id === "images") return `<div class="crumb">${crumb}</div>` + renderImagesStep(project);
   if (step.id === "animatique") return `<div class="crumb">${crumb}</div>` + renderAnimatiqueStep(project);
   if (step.id === "production") return `<div class="crumb">${crumb}</div>` + renderProductionStep(project);
+  if (step.id === "montage") return `<div class="crumb">${crumb}</div>` + renderMontageStep(project);
+  if (step.id === "qualite") return `<div class="crumb">${crumb}</div>` + renderQualiteStep(project);
   return `<div class="crumb">${crumb}</div>` + renderPlaceholder(project, step);
 }
 
@@ -1486,6 +1514,195 @@ function renderAnimatiqueStep(project) {
   `;
 }
 
+// ---------- Étape Montage & paroles (V4, §8.11) ----------
+function montageClips(project) {
+  return (window.AiXelMontage && AiXelMontage.clipsFromProject)
+    ? AiXelMontage.clipsFromProject(project)
+    : [];
+}
+
+function renderMontageStep(project) {
+  const m = project.montage || defaultMontage();
+  const locked = !!m.locked;
+  const prodLocked = !!(project.production && project.production.locked);
+  const hasAudio = !!(project.audioLocked && project.audio);
+  const clips = montageClips(project);
+  const lyricsSrc = project.sources.find((s) => s.category === "texte");
+  const alerts = (window.AiXelMontage && AiXelMontage.continuityAlerts) ? AiXelMontage.continuityAlerts(project) : [];
+
+  if (!prodLocked) {
+    return `
+      <div class="page-head"><h1>Montage & paroles</h1></div>
+      <p class="page-sub">Assemble les vidéos choisies en Production avec la piste audio verrouillée.</p>
+      <div class="card empty-card"><div class="empty-hint">Verrouille d'abord la production — les vidéos choisies deviennent alors la matière du montage.</div></div>
+    `;
+  }
+  if (!hasAudio || !clips.length) {
+    return `
+      <div class="page-head"><h1>Montage & paroles</h1></div>
+      <p class="page-sub">Il manque encore une brique pour la timeline.</p>
+      <div class="card empty-card"><div class="empty-hint">${!hasAudio ? "Verrouille l'audio maître" : "Choisis au moins une vidéo en Production"}.</div></div>
+    `;
+  }
+
+  const totalClipsDur = clips.reduce((a, c) => a + c.dur, 0);
+  return `
+    <div class="page-head">
+      <h1>Montage & paroles</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Montage verrouillé" : `${clips.length} plan${clips.length > 1 ? "s" : ""} · ${fmtTime(totalClipsDur)}`}</span>
+    </div>
+    <p class="page-sub">Timeline continue des vidéos choisies, calée sur l'audio maître. Contrôle la continuité avant l'export livrable.</p>
+    ${locked ? `<div class="locked-banner">🔒 Montage verrouillé — référence pour Qualité & exports.
+      <button class="btn small reopen" id="reopenMontage">Rouvrir</button></div>` : ""}
+
+    <div class="card montage-alerts">
+      <div class="rail-h" style="margin:0 0 10px">Continuité</div>
+      ${alerts.map((a) => `<div class="alert ${a.level}"><span class="tag">${escapeHtml(a.tag)}</span><b>${escapeHtml(a.title)}</b><p>${escapeHtml(a.body)}</p></div>`).join("") || `<div class="empty-hint">Aucune alerte.</div>`}
+    </div>
+
+    <div class="card animatic-card">
+      <div class="animatic-stage" id="montageStage">
+        <div class="animatic-placeholder" id="montagePlaceholder">Clique lecture pour prévisualiser le montage.</div>
+        <video id="montageVideo" playsinline style="display:none"></video>
+        <div class="animatic-caption" id="montageCaption"></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="play-btn" id="montagePlayBtn" aria-label="Lire">▶</button>
+        <div class="audio-meta"><div class="fname">${escapeHtml(project.audio.file || "Audio maître")}</div><div class="ftag">MONTAGE · ${clips.length} PLANS</div></div>
+        <div class="audio-time" id="montageTimeLabel">${fmtTime(0)} / ${fmtTime(project.audio.duration)}</div>
+      </div>
+      <div class="animatic-timeline" id="montageTimeline">
+        ${clips.map((c, i) => `<i data-montageseek="${c.start}" style="flex:${Math.max(c.dur, 0.4)}" class="${i % 2 ? "alt" : ""}" title="${escapeAttr(c.label)}"></i>`).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="rail-h">Plans dans la timeline</div>
+      <div class="montage-clip-list">
+        ${clips.map((c, i) => `
+          <div class="montage-clip-row">
+            <span class="montage-clip-idx">${String(i + 1).padStart(2, "0")}</span>
+            <div class="montage-clip-meta">
+              <b>${escapeHtml(c.label)}</b>
+              <span>${fmtTime(c.start)} → ${fmtTime(c.start + c.dur)} · ${c.dur.toFixed(1)}s</span>
+            </div>
+            <div class="thumb" data-videothumb="${c.sourceId}"></div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="field"><span>Notes de montage / paroles</span>
+        <textarea id="montageNotes" class="brief-textarea" rows="3" placeholder="Coupes, overlays paroles, consignes pour l'export…" ${locked ? "disabled" : ""}>${escapeHtml(m.notes || "")}</textarea>
+      </label>
+      <label class="check-row" style="margin-top:10px">
+        <input type="checkbox" id="montageLyricsOverlay" ${m.lyricsOverlay !== false ? "checked" : ""} ${locked ? "disabled" : ""} />
+        <span>Afficher le libellé du plan en overlay pendant la prévisualisation / l'export</span>
+      </label>
+      ${lyricsSrc ? `<p class="page-sub" style="margin-top:10px">Source paroles détectée : <b>${escapeHtml(lyricsSrc.name)}</b> (référence — synchronisation fine hors scope V4).</p>` : `<p class="page-sub" style="margin-top:10px">Aucune source « Paroles & textes » — tu peux en importer à l'étape Sources.</p>`}
+    </div>
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller le montage</h3>
+          <p>L'enchaînement des plans et les notes deviennent la référence pour Qualité & exports.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockMontage">Verrouiller le montage →</button></div>
+      </div>
+    ` : `
+      <div class="card decision-card">
+        <div class="decision-icon">→</div>
+        <div class="decision-body">
+          <h3>Passer à Qualité & exports</h3>
+          <p>Contrôle final et téléchargement du livrable.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="gotoQualite">Qualité & exports →</button></div>
+      </div>
+    `}
+  `;
+}
+
+function renderQualiteStep(project) {
+  const q = project.qualite || defaultQualite();
+  const m = project.montage || defaultMontage();
+  const locked = !!q.locked;
+  const montageReady = !!m.locked;
+  const clips = montageClips(project);
+  const checks = q.checks || defaultQualite().checks;
+  const checkDefs = [
+    { key: "continuity", label: "Continuité visuelle (identité, décors, accessoires)" },
+    { key: "audioSync", label: "Sync audio / plans acceptable" },
+    { key: "deliverable", label: "Livrable exporté et relu" },
+    { key: "credits", label: "Générique / crédits conformes" },
+  ];
+  const allOk = checkDefs.every((c) => checks[c.key] === "ok");
+  const mimeHint = (window.AiXelMontage && AiXelMontage.pickRecorderMime)
+    ? (AiXelMontage.pickRecorderMime() || "video/webm")
+    : "video/webm";
+
+  if (!montageReady) {
+    return `
+      <div class="page-head"><h1>Qualité & exports</h1></div>
+      <p class="page-sub">Contrôle final puis export du fichier livrable.</p>
+      <div class="card empty-card"><div class="empty-hint">Verrouille d'abord le montage — cette étape fige la timeline avant l'export.</div></div>
+    `;
+  }
+
+  return `
+    <div class="page-head">
+      <h1>Qualité & exports</h1>
+      <span class="status-chip ${locked ? "" : "chip-pending"}">${locked ? "Livraison verrouillée" : "Contrôle qualité"}</span>
+    </div>
+    <p class="page-sub">Checklist finale, puis export navigateur (MediaRecorder → WebM 1280×720, audio maître muxé). Chrome/Edge recommandés. Limite connue : export best-effort côté client, pas un encodeur pro.</p>
+    ${locked ? `<div class="locked-banner">🔒 Qualité & exports verrouillés.
+      <button class="btn small reopen" id="reopenQualite">Rouvrir</button></div>` : ""}
+
+    <div class="card">
+      <div class="rail-h">Checklist qualité</div>
+      ${checkDefs.map((c) => `
+        <label class="field" style="margin-top:10px"><span>${escapeHtml(c.label)}</span>
+          <select data-qcheck="${c.key}" ${locked ? "disabled" : ""}>
+            <option value="à vérifier" ${checks[c.key] === "à vérifier" ? "selected" : ""}>À vérifier</option>
+            <option value="ok" ${checks[c.key] === "ok" ? "selected" : ""}>OK</option>
+            <option value="à corriger" ${checks[c.key] === "à corriger" ? "selected" : ""}>À corriger</option>
+          </select>
+        </label>
+      `).join("")}
+      <label class="field" style="margin-top:12px"><span>Notes QC</span>
+        <textarea id="qualiteNotes" class="brief-textarea" rows="3" ${locked ? "disabled" : ""}>${escapeHtml(q.notes || "")}</textarea>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="rail-h">Export livrable</div>
+      <p class="page-sub">${clips.length} plan${clips.length > 1 ? "s" : ""} · format cible ${escapeHtml(String(mimeHint))} · durée audio ${fmtTime(project.audio.duration || 0)}</p>
+      <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn primary" id="exportDeliverable" ${locked ? "disabled" : ""}>Exporter le livrable</button>
+        <button class="btn ghost" id="downloadLastExport" ${m.lastExportId ? "" : "disabled"}>Télécharger le dernier export</button>
+      </div>
+      <div class="export-progress" id="exportProgress" hidden>
+        <div class="export-bar"><i id="exportBarFill"></i></div>
+        <span id="exportProgressLabel">Préparation…</span>
+      </div>
+      ${m.lastExportAt ? `<p class="page-sub" style="margin-top:10px">Dernier export : ${new Date(m.lastExportAt).toLocaleString("fr-FR")}</p>` : ""}
+    </div>
+
+    ${!locked ? `
+      <div class="card decision-card">
+        <div class="decision-icon">✦</div>
+        <div class="decision-body">
+          <h3>Verrouiller la livraison</h3>
+          <p>Confirme que le QC est fait${allOk ? "" : " (idéalement toutes les cases à OK)"}.</p>
+        </div>
+        <div class="decision-actions"><button class="btn primary" id="lockQualite">Verrouiller Qualité & exports →</button></div>
+      </div>
+    ` : ""}
+  `;
+}
+
 // ---------- Étape Production (V3.5, §8.10 — génération vidéo par plan) ----------
 // Strictement limitée aux plans dont une image test est déjà choisie (jamais en masse) — chaque
 // plan garde son propre panneau de génération, comme Images tests, avec le coût affiché avant
@@ -1820,7 +2037,7 @@ function audioKeyFor(project) {
 
 function stopAudioPlaybackIfStale(project) {
   const key = project ? audioKeyFor(project) : null;
-  const wantsPlayback = project && (project.activeStepId === "carte" || project.activeStepId === "animatique") && project.audio;
+  const wantsPlayback = project && (project.activeStepId === "carte" || project.activeStepId === "animatique" || project.activeStepId === "montage") && project.audio;
   if (audioEl && (!wantsPlayback || audioElKey !== key)) audioEl.pause();
 }
 
@@ -1865,6 +2082,12 @@ function syncAudioUI() {
   if (animTimeLabel) animTimeLabel.textContent = `${fmtTime(audioEl.currentTime || 0)} / ${fmtTime(audioEl.duration || 0)}`;
   if (animPlayBtn) animPlayBtn.textContent = audioEl.paused ? "▶" : "⏸";
   if (animTimeLabel || animPlayBtn) updateAnimaticStage(currentProject(), audioEl.currentTime || 0);
+
+  const montageTimeLabel = document.getElementById("montageTimeLabel");
+  const montagePlayBtn = document.getElementById("montagePlayBtn");
+  if (montageTimeLabel) montageTimeLabel.textContent = `${fmtTime(audioEl.currentTime || 0)} / ${fmtTime(audioEl.duration || 0)}`;
+  if (montagePlayBtn) montagePlayBtn.textContent = audioEl.paused ? "▶" : "⏸";
+  if (montageTimeLabel || montagePlayBtn) updateMontageStage(currentProject(), audioEl.currentTime || 0);
 }
 
 // ---------- Animatique : plan courant, pulsation Visual Melody simplifiée, paroles ----------
@@ -2033,12 +2256,12 @@ function renderRightRail(project) {
         <div class="note">${score < 30 ? "Tout début du projet" : score < 70 ? "Solide, à sécuriser" : "Bien avancé"}</div>
       </div>
 
-      <div class="rail-h">Alertes de continuité <span>${isDemo ? 3 : 0}</span></div>
+      <div class="rail-h">Alertes de continuité <span>${((!isDemo && window.AiXelMontage) ? AiXelMontage.continuityAlerts(project) : []).length || (isDemo ? 3 : 0)}</span></div>
       ${isDemo ? `
         <div class="alert priority"><span class="tag">Prioritaire</span><b>Véhicule non verrouillé dans 6 plans</b><p>Le modèle change entre Bentley, BMW et cabriolet générique.</p></div>
         <div class="alert warn"><span class="tag">À corriger</span><b>Générique final non conforme</b><p>Remplacer les faux crédits par le master AiXel Studio officiel.</p></div>
         <div class="alert ok"><span class="tag">Valide</span><b>Identité de MAT stable</b><p>Visage, lunettes, bomber et bijoux reconnus sur les références.</p></div>
-      ` : `<div class="empty-hint">Pas encore d'alertes — importe des sources et avance dans les étapes pour activer les vérifications de continuité.</div>`}
+      ` : ((window.AiXelMontage ? AiXelMontage.continuityAlerts(project) : []).map((a) => `<div class="alert ${a.level}"><span class="tag">${escapeHtml(a.tag)}</span><b>${escapeHtml(a.title)}</b><p>${escapeHtml(a.body)}</p></div>`).join("") || `<div class="empty-hint">Pas encore d'alertes — avance jusqu'à Production / Montage pour activer les vérifications.</div>`)}
 
       ${renderLockedRefs(project, isDemo)}
 
@@ -2075,11 +2298,13 @@ function bindCockpit(project) {
   bindImagesStep(project);
   bindAnimatiqueStep(project);
   bindProductionStep(project);
+  bindMontageStep(project);
+  bindQualiteStep(project);
 
   if (project.activeStepId === "carte" && project.audio) {
     bindCarteMusicaleAudio(project);
   }
-  if ((project.activeStepId === "carte" || project.activeStepId === "animatique") && project.audio) {
+  if ((project.activeStepId === "carte" || project.activeStepId === "animatique" || project.activeStepId === "montage") && project.audio) {
     syncAudioUI();
   }
 
@@ -2621,6 +2846,209 @@ function bindAnimatiqueStep(project) {
   if (project.audio && project.storyboard.shots.length) updateAnimaticStage(project, 0);
 }
 
+
+let montageVideoEl = null;
+let montageVideoSourceId = null;
+
+async function ensureMontageVideoUrl(sourceId) {
+  if (videoUrlCache.has(sourceId)) return videoUrlCache.get(sourceId);
+  const blob = await AiXelDB.getBlob(sourceId);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  videoUrlCache.set(sourceId, url);
+  return url;
+}
+
+async function updateMontageStage(project, t) {
+  if (!project || project.activeStepId !== "montage") return;
+  const clips = montageClips(project);
+  const video = document.getElementById("montageVideo");
+  const placeholder = document.getElementById("montagePlaceholder");
+  const caption = document.getElementById("montageCaption");
+  const timeline = document.getElementById("montageTimeline");
+  if (!video || !clips.length) return;
+  const clip = clips.reduce((acc, c) => (t >= c.start ? c : acc), clips[0]);
+  if (timeline && project.audio && project.audio.duration) {
+    timeline.style.setProperty("--playhead", `${Math.min(100, (t / project.audio.duration) * 100)}%`);
+  }
+  if (caption) {
+    const show = project.montage && project.montage.lyricsOverlay !== false;
+    caption.textContent = show ? (clip.label || "") : "";
+  }
+  if (montageVideoSourceId !== clip.sourceId) {
+    const url = await ensureMontageVideoUrl(clip.sourceId);
+    if (!url) {
+      if (placeholder) { placeholder.style.display = "flex"; placeholder.textContent = "Vidéo introuvable pour ce plan."; }
+      video.style.display = "none";
+      return;
+    }
+    montageVideoSourceId = clip.sourceId;
+    video.src = url;
+    video.style.display = "block";
+    if (placeholder) placeholder.style.display = "none";
+  } else {
+    video.style.display = "block";
+    if (placeholder) placeholder.style.display = "none";
+  }
+  // Seek within clip relative to shot start (best-effort)
+  const localT = Math.max(0, t - clip.start);
+  if (Math.abs((video.currentTime || 0) - localT) > 0.35) {
+    try { video.currentTime = Math.min(localT, Math.max(0, (video.duration || localT) - 0.05)); } catch (_) {}
+  }
+}
+
+function bindMontageStep(project) {
+  if (project.activeStepId !== "montage") return;
+  const notes = document.getElementById("montageNotes");
+  notes?.addEventListener("input", () => {
+    if (!project.montage) project.montage = defaultMontage();
+    if (project.montage.locked) return;
+    project.montage.notes = notes.value;
+    touch(project); persist();
+  });
+  document.getElementById("montageLyricsOverlay")?.addEventListener("change", (e) => {
+    if (!project.montage) project.montage = defaultMontage();
+    if (project.montage.locked) return;
+    project.montage.lyricsOverlay = !!e.target.checked;
+    touch(project); persist();
+    updateMontageStage(project, audioEl ? audioEl.currentTime : 0);
+  });
+  document.getElementById("montagePlayBtn")?.addEventListener("click", async () => {
+    const el = await loadAudioEl(project);
+    if (!el) return;
+    if (el.paused) { await el.play(); try { document.getElementById("montageVideo")?.play(); } catch (_) {} }
+    else { el.pause(); document.getElementById("montageVideo")?.pause(); }
+    syncAudioUI();
+  });
+  document.getElementById("montageTimeline")?.addEventListener("click", async (e) => {
+    const el = await loadAudioEl(project);
+    if (!el || !project.audio?.duration) return;
+    const seekEl = e.target.closest("[data-montageseek]");
+    if (seekEl) {
+      el.currentTime = Number(seekEl.dataset.montageseek) || 0;
+    } else {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      el.currentTime = ratio * project.audio.duration;
+    }
+    syncAudioUI();
+  });
+  document.getElementById("lockMontage")?.addEventListener("click", () => {
+    if (!project.montage) project.montage = defaultMontage();
+    project.montage.locked = true; project.montage.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "montage"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "qualite"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
+    touch(project); persist(); render();
+    toast("Montage verrouillé — contrôle qualité.");
+  });
+  document.getElementById("reopenMontage")?.addEventListener("click", () => {
+    project.montage.locked = false;
+    const step = project.steps.find((s) => s.id === "montage"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "qualite"); if (next && next.status === "active") next.status = "pending";
+    touch(project); persist(); render();
+  });
+  document.getElementById("gotoQualite")?.addEventListener("click", () => {
+    project.activeStepId = "qualite"; persist(); render();
+  });
+  // Initial paint
+  updateMontageStage(project, audioEl && audioElKey === audioKeyFor(project) ? audioEl.currentTime : 0);
+}
+
+function bindQualiteStep(project) {
+  if (project.activeStepId !== "qualite") return;
+  if (!project.qualite) project.qualite = defaultQualite();
+  if (!project.montage) project.montage = defaultMontage();
+
+  document.querySelectorAll("[data-qcheck]").forEach((el) => el.addEventListener("change", () => {
+    if (project.qualite.locked) return;
+    project.qualite.checks[el.dataset.qcheck] = el.value;
+    touch(project); persist();
+  }));
+  document.getElementById("qualiteNotes")?.addEventListener("input", (e) => {
+    if (project.qualite.locked) return;
+    project.qualite.notes = e.target.value;
+    touch(project); persist();
+  });
+
+  document.getElementById("exportDeliverable")?.addEventListener("click", async () => {
+    if (project.qualite.locked) return;
+    if (!window.AiXelMontage) { toast("Module montage-export.js manquant."); return; }
+    const progress = document.getElementById("exportProgress");
+    const fill = document.getElementById("exportBarFill");
+    const label = document.getElementById("exportProgressLabel");
+    const btn = document.getElementById("exportDeliverable");
+    if (btn) btn.disabled = true;
+    if (progress) progress.hidden = false;
+    try {
+      toast("Export en cours — laisse cet onglet au premier plan.");
+      const result = await AiXelMontage.exportDeliverable(project, {
+        getUrl: ensureMontageVideoUrl,
+        onProgress: (p) => {
+          if (fill) fill.style.width = `${Math.round(p * 100)}%`;
+          if (label) label.textContent = p >= 1 ? "Finalisation…" : `Export ${Math.round(p * 100)}%`;
+        },
+      });
+      const srcId = uid();
+      const ext = (result.mime || "video/webm").includes("mp4") ? "mp4" : "webm";
+      project.sources.push({
+        id: srcId,
+        name: `livrable_${project.id}_${Date.now().toString(36)}.${ext}`,
+        size: result.blob.size,
+        mime: result.mime || "video/webm",
+        category: "video",
+        role: "Livrable",
+        addedAt: Date.now(),
+        generated: true,
+        export: true,
+      });
+      await AiXelDB.putBlob(srcId, result.blob);
+      project.montage.lastExportId = srcId;
+      project.montage.lastExportAt = Date.now();
+      if (project.qualite.checks) project.qualite.checks.deliverable = "ok";
+      touch(project); persist();
+      // Auto-download
+      const url = URL.createObjectURL(result.blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = project.sources.find((s) => s.id === srcId).name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast("Livrable exporté et téléchargé.");
+      render();
+    } catch (err) {
+      console.error(err);
+      toast(err.message || "Échec de l'export.");
+      if (btn) btn.disabled = false;
+      if (label) label.textContent = "Échec";
+    }
+  });
+
+  document.getElementById("downloadLastExport")?.addEventListener("click", async () => {
+    const id = project.montage.lastExportId;
+    if (!id) return;
+    const blob = await AiXelDB.getBlob(id);
+    const meta = project.sources.find((s) => s.id === id);
+    if (!blob) { toast("Fichier d'export introuvable dans IndexedDB."); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = (meta && meta.name) || "livrable.webm";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  });
+
+  document.getElementById("lockQualite")?.addEventListener("click", () => {
+    project.qualite.locked = true; project.qualite.lockedAt = Date.now();
+    const step = project.steps.find((s) => s.id === "qualite"); if (step) step.status = "done";
+    touch(project); persist(); render();
+    toast("Qualité & exports verrouillés.");
+  });
+  document.getElementById("reopenQualite")?.addEventListener("click", () => {
+    project.qualite.locked = false;
+    const step = project.steps.find((s) => s.id === "qualite"); if (step) step.status = "active";
+    touch(project); persist(); render();
+  });
+}
+
 function bindProductionStep(project) {
   const findShot = (id) => project.storyboard.shots.find((s) => s.id === id);
 
@@ -2732,12 +3160,15 @@ function bindProductionStep(project) {
     if (!project.storyboard.shots.some((s) => s.selectedVideoId)) return;
     project.production.locked = true; project.production.lockedAt = Date.now();
     const step = project.steps.find((s) => s.id === "production"); if (step) step.status = "done";
+    const next = project.steps.find((s) => s.id === "montage"); if (next && next.status === "pending") next.status = "active";
+    if (next) project.activeStepId = next.id;
     touch(project); persist(); render();
-    toast("Production verrouillée.");
+    toast("Production verrouillée — passe au montage.");
   });
   document.getElementById("reopenProduction")?.addEventListener("click", () => {
     project.production.locked = false;
     const step = project.steps.find((s) => s.id === "production"); if (step) step.status = "active";
+    const next = project.steps.find((s) => s.id === "montage"); if (next && next.status === "active") next.status = "pending";
     touch(project); persist(); render();
   });
 }
