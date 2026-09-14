@@ -844,7 +844,7 @@ function renderLeftRail(project) {
       <div class="brand">
         <img class="mark" src="logo.png" alt="AiXel Video" />
         <div class="lines"><div class="studio">AIXEL STUDIO</div><div class="app-name">VideoGenerator</div></div>
-        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : "V3"}</span>
+        <span class="pilot-badge">${project.id === "bmw-bnc" ? "PILOTE · V0" : BUILD.split(" ·")[0]}</span>
       </div>
 
       <div class="project-select" id="projectSelect">
