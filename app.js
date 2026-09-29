@@ -128,7 +128,24 @@ function defaultShotVideo(sourceId) {
 // d'interface"). L'appel réel passe par des fonctions Netlify (netlify/functions/generate-image*)
 // qui gardent la clé API côté serveur ; le client ne connaît que ce fournisseur normalisé.
 const GEN_PROVIDER = { id: "replicate-flux-schnell", label: "Replicate — FLUX.1 [schnell]", costPerImage: 0.003 };
+const GROK_MANUAL = {
+  label: "Grok Imagine — via votre abonnement",
+  url: "https://grok.com/",
+};
 const genBusy = new Set(); // ids de plans en cours de génération (état transitoire, pas persisté)
+
+// Ce raccourci ne contourne jamais une API ni les limites de l'abonnement Grok : il prépare le
+// prompt dans le presse-papiers et ouvre Grok dans un nouvel onglet. Le média reste téléchargé et
+// importé explicitement par la personne qui réalise le projet, ce qui évite toute clé ou facture API.
+async function openGrokImagine(prompt, kind) {
+  try {
+    await navigator.clipboard.writeText(prompt);
+  } catch (err) {
+    console.warn("Copie du prompt Grok impossible.", err);
+  }
+  window.open(GROK_MANUAL.url, "_blank", "noopener");
+  toast(`Prompt ${kind} copié. Dans Grok Imagine, colle-le, génère, télécharge le fichier puis importe-le dans Sources.`);
+}
 
 // Compose le prompt envoyé au fournisseur à partir du plan (action/décor/caméra), des bibles
 // visuelles verrouillées liées (propriétés obligatoires) et du brief (palette/style) — jamais
@@ -1404,7 +1421,10 @@ function renderGenPanel(sh, project) {
       ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
       <div class="gen-row">
         <span class="gen-cost">≈ $${GEN_PROVIDER.costPerImage.toFixed(3)} / image · ${GEN_PROVIDER.label}</span>
-        <button class="btn small" data-genimage="${sh.id}" ${busy ? "disabled" : ""}>${busy ? "Génération en cours…" : "✨ Générer une image test"}</button>
+        <div class="gen-actions">
+          <button class="btn small" data-grokimage="${sh.id}">↗ Grok Imagine</button>
+          <button class="btn small" data-genimage="${sh.id}" ${busy ? "disabled" : ""}>${busy ? "Génération en cours…" : "✨ Générer une image test"}</button>
+        </div>
       </div>
     </div>
   `;
@@ -1811,7 +1831,10 @@ function renderGenVideoPanel(sh, project, refImage) {
       ${lastFailed && !busy ? `<div class="gen-error">⚠ Dernier essai échoué : ${escapeHtml(lastFailed.error || "erreur inconnue")}</div>` : ""}
       <div class="gen-row">
         <span class="gen-cost">≈ $${cost.toFixed(2)} / vidéo · ${resolution} · ${outputSec.toFixed(1)}s · ${provider.label}</span>
-        <button class="btn small" data-genvideo="${sh.id}" ${busy || !refImage || (needsVoice && !selectedVoiceId) ? "disabled" : ""}>${busy ? "Génération en cours (peut prendre 1-2 min)…" : "🎬 Générer la vidéo"}</button>
+        <div class="gen-actions">
+          <button class="btn small" data-grokvideo="${sh.id}" ${!refImage ? "disabled" : ""}>↗ Grok Imagine</button>
+          <button class="btn small" data-genvideo="${sh.id}" ${busy || !refImage || (needsVoice && !selectedVoiceId) ? "disabled" : ""}>${busy ? "Génération en cours (peut prendre 1-2 min)…" : "🎬 Générer la vidéo"}</button>
+        </div>
       </div>
     </div>
   `;
@@ -2743,6 +2766,14 @@ function bindImagesStep(project) {
     const sh = findShot(el.dataset.genprompt);
     if (sh) { sh.genPrompt = el.value; touch(project); persist(); }
   }));
+  document.querySelectorAll("[data-grokimage]").forEach((btn) => btn.addEventListener("click", async () => {
+    const shotId = btn.dataset.grokimage;
+    const sh = findShot(shotId);
+    const promptEl = document.querySelector(`[data-genprompt="${shotId}"]`);
+    const prompt = (promptEl && promptEl.value.trim()) || (sh && buildImagePrompt(sh, project));
+    if (!prompt) { toast("Rien à envoyer à Grok — précise une action, un décor ou un prompt pour ce plan."); return; }
+    await openGrokImagine(prompt, "image");
+  }));
   document.querySelectorAll("[data-genimage]").forEach((btn) => btn.addEventListener("click", async () => {
     const shotId = btn.dataset.genimage;
     const sh = findShot(shotId);
@@ -3064,6 +3095,14 @@ function bindProductionStep(project) {
   document.querySelectorAll("[data-genvideoaudio]").forEach((el) => el.addEventListener("change", () => {
     const sh = findShot(el.dataset.genvideoaudio);
     if (sh) { sh.genVideoAudioSourceId = el.value || null; touch(project); persist(); render(); }
+  }));
+  document.querySelectorAll("[data-grokvideo]").forEach((btn) => btn.addEventListener("click", async () => {
+    const shotId = btn.dataset.grokvideo;
+    const sh = findShot(shotId);
+    const promptEl = document.querySelector(`[data-genvideoprompt="${shotId}"]`);
+    const prompt = (promptEl && promptEl.value.trim()) || (sh && buildVideoPrompt(sh, project));
+    if (!prompt) { toast("Rien à envoyer à Grok — précise le mouvement ou le prompt de ce plan."); return; }
+    await openGrokImagine(prompt, "vidéo");
   }));
   document.querySelectorAll("[data-selectvideo]").forEach((btn) => btn.addEventListener("click", () => {
     const [shotId, vId] = btn.dataset.selectvideo.split(":");
