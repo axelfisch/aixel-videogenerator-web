@@ -1794,6 +1794,8 @@ function renderProductionStep(project) {
 function renderProductionShotRow(sh, i, project, locked) {
   const refImage = sh.images.find((im) => im.id === sh.selectedImageId);
   const refSrc = refImage ? project.sources.find((s) => s.id === refImage.sourceId) : null;
+  const usedVideoSourceIds = new Set(sh.videos.map((v) => v.sourceId));
+  const availableVideos = project.sources.filter((s) => s.category === "video" && !usedVideoSourceIds.has(s.id));
   return `
     <div class="shot-row">
       <div class="shot-top">
@@ -1803,6 +1805,14 @@ function renderProductionShotRow(sh, i, project, locked) {
       <div class="checklist-hint"><div><b>Image de référence :</b> ${escapeHtml(refSrc ? refSrc.name : "introuvable")}</div></div>
       <div class="image-grid">
         ${sh.videos.map((v) => renderVideoCandidate(v, sh, project, locked)).join("")}
+        ${!locked && availableVideos.length ? `
+          <div class="image-add">
+            <select data-videosrcpick="${sh.id}">
+              ${availableVideos.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join("")}
+            </select>
+            <button class="btn small" data-addvideo="${sh.id}">+ Ajouter une vidéo importée</button>
+          </div>
+        ` : ""}
       </div>
       ${!locked ? renderGenVideoPanel(sh, project, refImage) : ""}
     </div>
@@ -3103,6 +3113,17 @@ function bindProductionStep(project) {
     const prompt = (promptEl && promptEl.value.trim()) || (sh && buildVideoPrompt(sh, project));
     if (!prompt) { toast("Rien à envoyer à Grok — précise le mouvement ou le prompt de ce plan."); return; }
     await openGrokImagine(prompt, "vidéo");
+  }));
+  document.querySelectorAll("[data-addvideo]").forEach((btn) => btn.addEventListener("click", () => {
+    const shotId = btn.dataset.addvideo;
+    const sh = findShot(shotId);
+    const select = document.querySelector(`[data-videosrcpick="${shotId}"]`);
+    if (!sh || !select || !select.value) return;
+    const newVideo = defaultShotVideo(select.value);
+    sh.videos.push(newVideo);
+    if (!sh.selectedVideoId) sh.selectedVideoId = newVideo.id;
+    touch(project); persist(); render();
+    toast("Vidéo importée — ajoutée aux candidates de ce plan.");
   }));
   document.querySelectorAll("[data-selectvideo]").forEach((btn) => btn.addEventListener("click", () => {
     const [shotId, vId] = btn.dataset.selectvideo.split(":");
